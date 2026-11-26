@@ -21,7 +21,7 @@ def create_app(config=None):
         SESSION_COOKIE_NAME="ismanager_session",
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "1") == "1",
-        PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
+        PERMANENT_SESSION_LIFETIME=timedelta(days=7),
         MAX_CONTENT_LENGTH=16 * 1024**2,
         MAX_FORM_MEMORY_SIZE=5 * 1024**2,
         MAX_FORM_PARTS=300,
@@ -69,7 +69,9 @@ def create_app(config=None):
         if request.endpoint != "auth.login":
             if g.user is None:
                 return redirect(url_for("auth.login"))
-            if g.user["must_change"] and request.endpoint not in {"auth.account", "auth.logout"}:
+            if request.endpoint not in {"auth.account", "auth.logout"} and (
+                g.user["must_change"] or (g.user["admin"] and not g.user["totp"] and db.auth_settings()["admin_totp"])
+            ):
                 return redirect(url_for("auth.account"))
             if request.blueprint == "admin" and not g.user["admin"]:
                 abort(403)
@@ -111,7 +113,10 @@ def create_app(config=None):
 
     @app.errorhandler(HTTPException)
     def error(exc):
-        return render_template("error.html", error=exc), exc.code
+        response = app.make_response((render_template("error.html", error=exc), exc.code))
+        if exc.code == 503:
+            response.headers["Retry-After"] = "8"
+        return response
 
     app.cli.add_command(auth.admin_password)
     return app

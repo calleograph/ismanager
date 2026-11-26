@@ -6,12 +6,14 @@ import sqlite3
 import ssl
 from pathlib import Path
 
+from cryptography import x509
+from cryptography.hazmat.primitives.serialization import Encoding
 from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, url_for
 from ldap3.utils.dn import parse_dn
 
 from . import directory
 from .auth import digest, protected, reveal
-from .db import audit, get_db
+from .db import audit, auth_settings, get_db
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
 
@@ -30,15 +32,17 @@ def profile_config(row):
 
 
 def roles(config, groups):
-    is_admin = bool(config["admin_groups"]) and directory.group_allowed(groups, config["admin_groups"])
-    return is_admin or directory.group_allowed(groups, config["user_groups"]), is_admin
+    is_admin = (config.get("use_for_admins", True) and bool(config["admin_groups"])
+                and directory.group_allowed(groups, config["admin_groups"]))
+    as_user = config.get("use_for_users", True) and directory.group_allowed(groups, config["user_groups"])
+    return is_admin or as_user, is_admin
 
 
 def directory_login(login, password):
     db = get_db()
     if not re.fullmatch(r"[\w.\-]+(?:[@\\][\w.\-]+)?", login):
         return None
-    for row in db.execute("SELECT * FROM directories WHERE enabled=1 ORDER BY id").fetchall():
+    for row in db.execute("SELECT * FROM directories WHERE enabled=1 ORDER BY coalesce(json_extract(config,'$.priority'),100),id").fetchall():
         cfg = json.loads(row["config"])
         if "\\" in login and cfg["domain"].casefold() != login.split("\\", 1)[0].casefold():
             continue
@@ -65,7 +69,7 @@ def directory_login(login, password):
 @bp.get("/")
 def index():
     db = get_db()
-    profiles = db.execute("SELECT id,name,enabled FROM directories ORDER BY id").fetchall()
+    profiles = db.execute("SELECT id,name,enabled FROM directories ORDER BY coalesce(json_extract(config,'$.priority'),100),id").fetchall()
     sessions = db.execute("""SELECT u.id,u.display_name,COUNT(*) AS n FROM sessions s JOIN users u
         ON u.id=s.user_id WHERE s.expires>unixepoch() GROUP BY u.id ORDER BY u.display_name""").fetchall()
     events = db.execute("""SELECT a.time,a.event,u.username FROM audit a LEFT JOIN users u ON u.id=a.actor
@@ -75,7 +79,21 @@ def index():
         status = json.loads((Path(os.getenv("CONTROL_DIR", "/control")) / "status.json").read_text())
     except (OSError, ValueError):
         pass
-    return render_template("admin.html", profiles=profiles, sessions=sessions, events=events, status=status)
+    return render_template("admin.html", profiles=profiles, sessions=sessions, events=events, status=status, policy=auth_settings())
+
+
+@bp.post("/access")
+def access():
+    limits = (("hours", 1, 168), ("attempts_user", 3, 100), ("attempts_ip", 3, 500), ("minutes", 1, 60))
+    values = [request.form.get(key, type=int) for key, _, _ in limits]
+    if any(value is None or not low <= value <= high for value, (_, low, high) in zip(values, limits)):
+        abort(400, description="Проверьте срок сеанса, пороги и длительность блокировки.")
+    with get_db() as db:
+        db.execute("UPDATE auth_settings SET hours=?,attempts_user=?,attempts_ip=?,minutes=?,admin_totp=? WHERE id=1",
+                   (*values, int("admin_totp" in request.form)))
+        audit("access.saved", g.user["id"])
+    flash("Политика входа сохранена.")
+    return redirect(url_for("admin.index"))
 
 
 @bp.post("/users/<int:user_id>/revoke")
@@ -151,6 +169,21 @@ def profile(profile_id):
                 data.update(port=int(request.form.get("port", 636)), timeout=int(request.form.get("timeout", 5)))
                 for key in ("user_groups", "admin_groups"):
                     data[key] = [line.strip() for line in request.form.get(key, "").splitlines() if line.strip()]
+                data["priority"] = int(request.form.get("priority", 100))
+                if not 1 <= data["priority"] <= 9999:
+                    raise ValueError("Порядок проверки должен быть от 1 до 9999.")
+                data.update({key: key in request.form or "role_flags" not in request.form
+                             for key in ("use_for_users", "use_for_admins")})
+                certificate = request.files.get("certificate")
+                if certificate and certificate.filename:
+                    raw = certificate.stream.read(65537)
+                    if len(raw) > 65536:
+                        raise ValueError("Файл сертификата больше 64 КиБ.")
+                    try:
+                        data["ca"] = (raw.decode("ascii") if raw.lstrip().startswith(b"-----") else
+                                      x509.load_der_x509_certificate(raw).public_bytes(Encoding.PEM).decode("ascii"))
+                    except ValueError:
+                        raise ValueError("Требуется сертификат в формате PEM или DER.") from None
                 validate(data)
                 name = request.form.get("name", "").strip()
                 pwd = request.form.get("password", "")

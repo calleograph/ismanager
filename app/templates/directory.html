@@ -1,6 +1,6 @@
 {% extends 'base.html' %}{% block title %}Подключение каталога{% endblock %}{% block content %}
 <h1>{{ row.name if row else 'Новое подключение' }}</h1>{% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
-<section class="panel"><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="save">
+<section class="panel"><form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="save">
 <div class="form-grid"><label>Название<input name="name" value="{{ row.name if row else '' }}" required></label>
 <label>Тип каталога<select name="kind"><option value="ad">Active Directory</option><option value="openldap" {{ 'selected' if data.kind=='openldap' }}>OpenLDAP</option></select></label>
 <label>Сервер<input name="host" value="{{ data.host }}" placeholder="dc.example.org" required></label>
@@ -14,9 +14,14 @@
 <label>Суффикс UPN<input name="suffix" value="{{ data.suffix }}"></label>
 <label>Атрибут логина<input name="login_attr" value="{{ data.login_attr }}" placeholder="sAMAccountName / uid"></label>
 <label>Атрибут имени<input name="name_attr" value="{{ data.name_attr }}" placeholder="displayName"></label></div>
+<label>Порядок проверки (меньший номер раньше)<input type="number" name="priority" value="{{ data.priority or 100 }}" min="1" max="9999" required></label>
 <label>Сертификаты CA в формате PEM<textarea name="ca" rows="3" placeholder="По умолчанию используются системные корневые сертификаты">{{ data.ca }}</textarea></label>
+<label>Заменить CA файлом PEM или DER<input type="file" name="certificate" accept=".pem,.cer,.crt,.der"></label>
 <label>Группы допуска · по одному DN на строку<textarea name="user_groups" rows="2" placeholder="Пустой список разрешает вход всем пользователям каталога">{{ (data.user_groups or [])|join('\n') }}</textarea></label>
 <label>Группы администраторов<textarea name="admin_groups" rows="2" placeholder="Пустой список оставляет административный доступ локальному администратору">{{ (data.admin_groups or [])|join('\n') }}</textarea></label>
+<input type="hidden" name="role_flags" value="1">
+<label><input type="checkbox" name="use_for_users" {{ 'checked' if data.get('use_for_users',true) }}> Вход пользователей</label>
+<label><input type="checkbox" name="use_for_admins" {{ 'checked' if data.get('use_for_admins',true) }}> Вход администраторов каталога</label>
 <label><input type="checkbox" name="enabled" {{ 'checked' if not row or row.enabled }}> Разрешить вход через это подключение</label>
 <button>Сохранить подключение</button></form></section>
 {% if row %}<section class="panel"><h2>Диагностика сохранённого подключения</h2><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Тестовый пользователь<input name="test_user"></label><label>Пароль для проверки входа<input type="password" autocomplete="off" name="test_password"></label><div class="actions"><button name="action" value="test">Проверить</button><button class="secondary" data-confirm="Удалить подключение и завершить его сеансы?" name="action" value="delete">Удалить подключение</button></div></form>

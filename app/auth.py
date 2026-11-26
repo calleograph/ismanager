@@ -10,7 +10,7 @@ from flask import Blueprint, current_app, flash, g, redirect, render_template, r
 from flask.cli import with_appcontext
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from .db import audit, get_db
+from .db import audit, auth_settings, get_db
 
 bp = Blueprint("auth", __name__)
 DUMMY_HASH = generate_password_hash(secrets.token_urlsafe())
@@ -37,11 +37,13 @@ def limited(login):
     """Reserve an attempt before the slow bind, including concurrent requests."""
     db = get_db()
     now = int(time.time())
+    policy = auth_settings()
     with db:
         db.execute("DELETE FROM attempts WHERE until<=?", (now,))
-        for key, maximum in ((digest("ip:" + str(request.remote_addr)), 80), (digest("user:" + login.casefold()), 12)):
+        for key, maximum in ((digest("ip:" + str(request.remote_addr)), policy["attempts_ip"]),
+                             (digest("user:" + login.casefold()), policy["attempts_user"])):
             db.execute("INSERT INTO attempts VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1",
-                       (key, now + 300))
+                       (key, now + policy["minutes"] * 60))
             if db.execute("SELECT count FROM attempts WHERE key=?", (key,)).fetchone()[0] > maximum:
                 return True
     return False
@@ -53,7 +55,7 @@ def begin(user_id):
     new_sid = secrets.token_urlsafe(32)
     with db:
         db.execute("DELETE FROM sessions WHERE expires<=? OR token=?", (now, digest(session.get("sid", ""))))
-        db.execute("INSERT INTO sessions VALUES (?,?,?)", (digest(new_sid), user_id, now + 43200))
+        db.execute("INSERT INTO sessions VALUES (?,?,?)", (digest(new_sid), user_id, now + 3600 * auth_settings()["hours"]))
     session.clear()
     session.permanent = True
     session["sid"] = new_sid
@@ -78,7 +80,7 @@ def login():
     name = request.form.get("username", "").strip()
     password = request.form.get("password", "")
     if limited(name[:256]):
-        return render_template("login.html", error="Слишком много попыток. Повторите через пять минут."), 429
+        return render_template("login.html", error=f"Слишком много попыток. Повторите через {auth_settings()['minutes']} мин."), 429
     db = get_db()
     user = None
     if name and len(name) <= 256 and password and len(password) <= 4096:
@@ -140,14 +142,14 @@ def account():
                     db.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
                     audit("totp.enabled", user["id"])
                 begin(user["id"])
-            elif action == "disable" and user["totp"] and code.isascii() and code.isdigit() and accept_totp(user, code):
+            elif action == "disable" and user["totp"] and not (user["admin"] and auth_settings()["admin_totp"]) and code.isascii() and code.isdigit() and accept_totp(user, code):
                 with db:
                     db.execute("UPDATE users SET totp=NULL,last_step=0 WHERE id=?", (user["id"],))
                     audit("totp.disabled", user["id"])
             else:
                 flash("Код не принят.", "error")
         return redirect(url_for("auth.account"))
-    return render_template("account.html", pending=pending)
+    return render_template("account.html", pending=pending, required_totp=user["admin"] and auth_settings()["admin_totp"])
 
 
 @click.command("admin-password")

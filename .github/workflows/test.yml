@@ -21,4 +21,33 @@ jobs:
       - run: python scripts/manage.py --help && bash -n install.sh && node --test tests/passgen.test.cjs
       - run: python -m pytest -q tests
       - run: PYTHON=$(command -v python) tests/ldap/run.sh
+      - run: PYTHON=$(command -v python) tests/active_directory/run.sh
       - run: python -m playwright install --with-deps chromium && python -m tests.live_web
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install containers and models
+        run: |
+          umask 077
+          ./install.sh --shared-host --no-operator > "$RUNNER_TEMP/ismanager-install.log" 2>&1 || {
+            docker compose ps -a
+            docker compose logs --tail 25 web worker
+            exit 1
+          }
+          curl -fkSs https://localhost:18443/healthz
+      - name: Recognize synthetic audio and video
+        run: docker compose run --rm --no-deps -e PYTHONPATH=/opt/ismanager -v "$PWD/tests:/checks:ro" worker python /checks/live_asr.py
+      - name: Back up and restore a new installation
+        run: |
+          docker compose exec -T web sh -c 'echo before > /data/ci-snapshot'
+          ./scripts/manage.py backup
+          archive=$(find .runtime/backups -name '*.tar' -type f -print -quit)
+          docker compose exec -T web sh -c 'echo after > /data/ci-snapshot'
+          ./scripts/manage.py restore "$archive"
+          test "$(docker compose exec -T web cat /data/ci-snapshot)" = before
+          ./scripts/manage.py status
+          curl -fkSs https://localhost:18443/healthz

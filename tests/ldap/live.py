@@ -42,6 +42,13 @@ def test_real_directory(tmp_path, protocol):
     assert status == 302 and member.get("/").status_code == 200 and member.get("/admin/").status_code == 403
     assert signin("bob", test["test_password"])[1] == 401
     assert signin("alice", secrets.token_hex(8))[1] == 401
+    form.update(role_flags="1", use_for_admins="on", admin_groups="cn=vpn-users,ou=groups,dc=example,dc=org")
+    c.post("/admin/directory/1", data={**form, "csrf_token":csrf(c.get("/admin/directory/1"))})
+    assert signin("alice", test["test_password"])[0].get("/admin/").status_code == 200
+    form.pop("use_for_admins")
+    c.post("/admin/directory/1", data={**form, "csrf_token":csrf(c.get("/admin/directory/1"))})
+    assert signin("alice", test["test_password"])[1] == 401
+    form["use_for_users"] = "on"
     form["ca"] = Path(os.environ[ENV+"WRONG_CA"]).read_text()
     c.post("/admin/directory/1", data={**form, "csrf_token":csrf(c.get("/admin/directory/1"))})
     assert signin("alice", test["test_password"])[1] == 401

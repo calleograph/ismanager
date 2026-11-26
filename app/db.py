@@ -38,6 +38,12 @@ def init_db(db):
             id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
             config TEXT NOT NULL, password TEXT NOT NULL, enabled INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS auth_settings (
+            id INTEGER PRIMARY KEY CHECK(id=1), hours INTEGER NOT NULL,
+            attempts_user INTEGER NOT NULL, attempts_ip INTEGER NOT NULL, minutes INTEGER NOT NULL,
+            admin_totp INTEGER NOT NULL
+        );
+        INSERT OR IGNORE INTO auth_settings VALUES(1,12,12,80,5,0);
         CREATE TABLE IF NOT EXISTS audit (
             id INTEGER PRIMARY KEY, time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             actor INTEGER, event TEXT NOT NULL
@@ -48,3 +54,9 @@ def init_db(db):
 def audit(event, actor=None):
     db = get_db()
     db.execute("INSERT INTO audit(actor,event) VALUES (?,?)", (actor, event))
+
+
+def auth_settings():
+    if "auth_settings" not in g:
+        g.auth_settings = get_db().execute("SELECT * FROM auth_settings WHERE id=1").fetchone()
+    return g.auth_settings

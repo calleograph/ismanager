@@ -72,3 +72,15 @@ def test_totp_and_reset(app, monkeypatch):
     assert c.get("/admin/").status_code == 200
     app.test_cli_runner().invoke(args=["admin-password"])
     assert c.get("/admin/").status_code == 302
+
+
+def test_configurable_access_policy(app):
+    c, _ = first_login(app)
+    data = dict(hours=1, attempts_user=4, attempts_ip=10, minutes=2, admin_totp="on")
+    c.post("/admin/access", data={**data, "csrf_token": token(c.get("/admin/"))})
+    assert c.get("/admin/").location.endswith("/account")
+    assert "обязателен второй фактор" in c.get("/account").get_data(as_text=True)
+    guest = app.test_client()
+    for i in range(5):
+        res = guest.post("/login", data=dict(username="missing", password="bad", csrf_token=token(guest.get("/login"))))
+    assert res.status_code == 429 and "2 мин" in res.get_data(as_text=True)

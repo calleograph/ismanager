@@ -309,7 +309,7 @@ def user_filter(cfg: DirectoryConfig, login: str) -> str:
     if upn:
         conds.append(f"({cfg.login_attr}={escape_filter_chars(upn)})")
         if cfg.kind == "ad":
-            conds.append(f"(userPrincipalName={escape_filter_chars(upn)})")
+            conds = [f"(userPrincipalName={escape_filter_chars(upn)})"]
     cond = conds[0] if len(conds) == 1 else "(|" + "".join(conds) + ")"
     base = cfg.user_filter
     if base and not base.startswith("("):

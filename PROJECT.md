@@ -1,6 +1,6 @@
 # IS Manager — архитектура и сопровождение
 
-IS Manager объединяет четыре локальных инструмента с общей учётной записью. Проект начат в пустом каталоге в ноябре 2026 года. [Требования к продукту](docs/MASTER_PROMPT.md)
+IS Manager объединяет четыре локальных инструмента с общей учётной записью. Проект начат в пустом каталоге в ноябре 2026 года. [Требования к продукту](docs/MASTER_PROMPT.md) · [Порядок передачи проекта](docs/AI_PROJECT_ONBOARDING_PROMPT.md)
 
 ## Карта переноса
 
@@ -43,6 +43,7 @@ export PRIVACY_NLP_DIR="$PWD/.venv/nlp" OPENBLAS_NUM_THREADS=1
 python -m app.privacy.fetch_models "$PRIVACY_NLP_DIR"
 python -m pytest -q tests
 tests/ldap/run.sh
+tests/active_directory/run.sh
 python -m playwright install chromium
 python -m tests.live_web
 ```
