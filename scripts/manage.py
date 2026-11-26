@@ -22,7 +22,9 @@ GIT = ["git", "-C", str(ROOT)]
 
 
 def run(*args, capture=False, **kwargs):
-    result = subprocess.run(args, cwd=ROOT, check=True, stdout=subprocess.PIPE if capture else None, **kwargs)
+    if capture:
+        kwargs["stdout"] = subprocess.PIPE
+    result = subprocess.run(args, cwd=ROOT, check=True, **kwargs)
     return result.stdout.decode().strip() if capture else None
 
 
@@ -123,7 +125,8 @@ with db: db.execute("DELETE FROM sessions")
                     "--entrypoint", "python", image("web"), "-c", extractor, stdin=data)
             save_config({**cfg, "SECRET_KEY": meta["key"], "DATA_VOLUME": volume})
         except BaseException:
-            run("docker", "volume", "rm", volume, capture=True)
+            if settings().get("DATA_VOLUME") != volume:
+                run("docker", "volume", "rm", volume, capture=True)
             raise
     return cfg
 
@@ -151,8 +154,8 @@ def recover_version():
     pending.unlink()
 
 
-def change_version(target):
-    if git("status", "--porcelain", "--untracked-files=no"):
+def change_version(target, *, rollback=False):
+    if git("status", "--porcelain"):
         raise ValueError("В рабочей копии есть незакоммиченные правки.")
     old = git("rev-parse", "HEAD")
     new = git("rev-parse", "--verify", target + "^{commit}")
@@ -165,7 +168,11 @@ def change_version(target):
         compose("stop")
         snapshot = backup()
         git("switch", "--detach", new)
-        build()
+        cached = rollback and all(subprocess.run(
+            ["docker", "image", "inspect", image(service)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        ).returncode == 0 for service in ("web", "worker"))
+        if not cached:
+            build()
         journal.update(starting=True, snapshot=snapshot.name)
         replace(pending, json.dumps(journal))
         start()
@@ -191,7 +198,7 @@ def operate(action, archive=None):
     if action == "rollback":
         if not (STATE / "previous").exists():
             raise ValueError("Предыдущая установленная версия отсутствует.")
-        return change_version((STATE / "previous").read_text().strip())
+        return change_version((STATE / "previous").read_text().strip(), rollback=True)
     if action == "backup":
         compose("stop")
         try:

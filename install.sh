@@ -64,8 +64,22 @@ else
   fi
   cd "$target"
 fi
-if [[ -n "$ref" && "$(git rev-parse HEAD)" != "$(git rev-parse --verify "$ref^{commit}")" ]]; then
-  echo "Текущая копия отличается от --ref. Для смены версии выполните scripts/manage.py update или используйте новый --dir." >&2; exit 1
+updated=0
+if [[ -n "$ref" && "$(git rev-parse HEAD)" != "$(git rev-parse --verify "$ref^{commit}" 2>/dev/null || true)" ]]; then
+  git fetch --tags origin main
+  newest=$(git tag --merged FETCH_HEAD | grep -Ex 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1)
+  [[ "$ref" == "$newest" && -f .env && -d .runtime/control ]] || {
+    echo "Для установки другой версии используйте новый --dir. Для возврата версии установленного приложения выполните scripts/manage.py rollback." >&2
+    exit 1
+  }
+  # An older installed release may be unable to upgrade itself. Run the release's versioned helper against this installation.
+  helper=$(mktemp .runtime/upgrade-XXXXXX.py)
+  trap 'rm -f "$helper"' EXIT
+  git show "$ref:scripts/manage.py" > "$helper"
+  python3 "$helper" update
+  rm "$helper"
+  trap - EXIT
+  updated=1
 fi
 if [[ ! -f .env ]]; then
   [[ "$name" =~ ^[a-z0-9][a-z0-9_-]*$ && "$port" =~ ^[0-9]{1,5}$ && "$public_host" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Проверьте имя, порт и DNS."; exit 2; }
@@ -99,7 +113,11 @@ mkdir -p .runtime/control
 chmod 755 .runtime/control
 if ((! operator_only)); then
   echo "Сборка контейнеров, загрузка моделей и проверка готовности. При первой установке пароль admin будет выведен в терминал."
-  python3 scripts/manage.py install
+  if ((updated)); then
+    docker compose exec -T web flask --app app admin-password --if-missing
+  else
+    python3 scripts/manage.py install
+  fi
 fi
 if ((! no_operator)); then
   python3 scripts/install_operator.py

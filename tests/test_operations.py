@@ -32,3 +32,12 @@ def test_marker_blocks_writes_during_update(tmp_path, monkeypatch):
     assert client.get("/healthz").status_code == 200
     assert client.get("/login").status_code == 503
     assert client.post("/passwords/generate").status_code == 503
+
+
+def test_backup_stream_is_forwarded(tmp_path):
+    import sys
+    from scripts.manage import run
+    output = tmp_path / "stream"
+    with output.open("wb") as fd:
+        run(sys.executable, "-c", "import sys;sys.stdout.buffer.write(b'archive')", stdout=fd)
+    assert output.read_bytes() == b"archive"
