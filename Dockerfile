@@ -7,8 +7,8 @@ RUN pip install -r requirements.txt && pip check
 COPY app/privacy/fetch_models.py /tmp/fetch_models.py
 RUN python /tmp/fetch_models.py /opt/nlp
 RUN groupadd -g 10001 ismanager && useradd -m -u 10001 -g ismanager ismanager && install -d -o ismanager -g ismanager /data
-COPY VERSION ./
-COPY app ./app
+COPY --chown=10001:10001 VERSION ./
+COPY --chown=10001:10001 app ./app
 USER 10001:10001
 EXPOSE 8443
 HEALTHCHECK --interval=10s --timeout=5s --start-period=1m CMD python -c "import ssl, urllib.request; urllib.request.urlopen('https://localhost:8443/healthz', context=ssl._create_unverified_context(), timeout=4).read()"

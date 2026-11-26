@@ -3,6 +3,7 @@ set -euo pipefail
 umask 077
 repo=https://github.com/calleograph/ismanager.git
 target=/opt/ismanager
+explicit_dir=0
 ref=""
 name="${COMPOSE_PROJECT_NAME:-ismanager}"
 port="${PORT:-18443}"
@@ -13,7 +14,7 @@ no_operator=0
 shared=0
 while (($#)); do
   case "$1" in
-    --dir) target="$2"; shift 2;;
+    --dir) explicit_dir=1; target="$2"; shift 2;;
     --ref) ref="$2"; shift 2;;
     --name) name="$2"; shift 2;;
     --port) port="$2"; shift 2;;
@@ -43,15 +44,23 @@ if ! command -v git >/dev/null || ! command -v python3 >/dev/null || ! docker co
 fi
 python3 -c 'import sys; assert sys.version_info >= (3,10), "Требуется Python 3.10+"'
 docker info >/dev/null
-if [[ -f "$here/scripts/manage.py" && -f "$here/compose.yaml" ]] && git -C "$here" rev-parse --git-dir >/dev/null 2>&1; then
+if { ((! explicit_dir)) || [[ "$(realpath -m "$target")" == "$here" ]]; } && [[ -f "$here/scripts/manage.py" && -f "$here/compose.yaml" ]] && git -C "$here" rev-parse --git-dir >/dev/null 2>&1; then
   cd "$here"
 else
   if [[ ! -e "$target" ]] || [[ -d "$target" && -z "$(ls -A "$target")" ]]; then
-    git clone "$repo" "$target"
+    (umask 022; git clone "$repo" "$target")
     if [[ -z "$ref" ]]; then ref=$(git -C "$target" tag --list | grep -Ex 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1); fi
     git -C "$target" switch --detach "${ref:?Не найден релиз}"
   else
     [[ "$(git -C "$target" remote get-url origin)" == "$repo" && -f "$target/scripts/manage.py" ]] || { echo "Каталог уже занят."; exit 1; }
+    # A failed first bootstrap may have a checkout and a key but no deployment data yet.
+    volume=$(sed -n 's/^DATA_VOLUME=//p' "$target/.env" 2>/dev/null || true)
+    if [[ -z "$volume" ]] || ! docker volume inspect "$volume" >/dev/null 2>&1; then
+      [[ -z "$(git -C "$target" status --porcelain --untracked-files=no)" ]] || { echo "Сохраните изменения рабочей копии."; exit 1; }
+      git -C "$target" fetch --tags origin main
+      if [[ -z "$ref" ]]; then ref=$(git -C "$target" tag --merged FETCH_HEAD | grep -Ex 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1); fi
+      (umask 022; git -C "$target" switch --detach "${ref:?Не найден релиз}")
+    fi
   fi
   cd "$target"
 fi

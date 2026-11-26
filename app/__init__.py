@@ -59,6 +59,8 @@ def create_app(config=None):
         g.user = None
         if request.endpoint in {"static", "health"}:
             return
+        if (Path(os.getenv("CONTROL_DIR", "/control")) / "maintenance").exists():
+            abort(503, description="Идёт обслуживание IS Manager. Повторите запрос через несколько минут.")
         if "sid" in session:
             g.user = db.get_db().execute(
                 "SELECT users.* FROM users JOIN sessions ON users.id=sessions.user_id "

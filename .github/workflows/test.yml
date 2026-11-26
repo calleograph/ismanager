@@ -18,6 +18,7 @@ jobs:
       - run: sudo apt-get update -qq && sudo apt-get install -y tesseract-ocr-rus tesseract-ocr-eng poppler-utils
       - run: pip install -r requirements.txt pytest playwright
       - run: python -m app.privacy.fetch_models "$PRIVACY_NLP_DIR"
+      - run: python scripts/manage.py --help && bash -n install.sh && node --test tests/passgen.test.cjs
       - run: python -m pytest -q tests
       - run: PYTHON=$(command -v python) tests/ldap/run.sh
       - run: python -m playwright install --with-deps chromium && python -m tests.live_web

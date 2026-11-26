@@ -3,15 +3,15 @@ import json
 import os
 import re
 import secrets
-import tempfile
 import subprocess
 import sys
+import tempfile
 
 from flask import Blueprint, Response, abort, g, redirect, render_template, request, url_for
 
 from .db import get_db
-from .privacy.export import MIMES, export
 from .privacy.engine import Anonymizer, CATEGORIES, Policy, PrivacyError, Term
+from .privacy.export import MIMES, export
 from .privacy.files import MAX_BYTES, MAX_TEXT, SUPPORTED
 from .privacy.names import NlpUnavailable
 from .privacy.verify import independent_check
@@ -88,8 +88,10 @@ def index():
     nonce = request.form.get("nonce")
     if nonce and not re.fullmatch("[0-9a-f]{32}", nonce):
         abort(400)
+
     def previous():
         return db.execute("SELECT record_id FROM redaction_requests WHERE user_id=? AND nonce=?", (owner, nonce)).fetchone()
+
     if nonce and not request.form.get("preview") and (record := previous()):
         return redirect(url_for("redaction.show", record_id=record["record_id"]))
     source = request.form.get("text", "")
@@ -106,7 +108,7 @@ def index():
             with tempfile.TemporaryDirectory(prefix="ismanager-extract-") as staging:
                 proc = subprocess.run([sys.executable, "-m", "app.privacy.files", ext],
                                       input=raw, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                      env=dict(os.environ, TMPDIR=staging), timeout=63)
+                                      env={"PATH": os.defpath + ":/usr/local/bin", "TMPDIR": staging, "LC_ALL": "C.UTF-8"}, timeout=63)
             if proc.returncode:
                 raise ValueError("Файл превысил пределы обработки.")
             decoded = json.loads(proc.stdout)

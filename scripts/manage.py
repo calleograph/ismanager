@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Host-side release, backup and restore commands. Requires Python 3.10+."""
 import argparse
-import contextlib
 import fcntl
 import io
 import json
@@ -116,12 +115,16 @@ assert db.execute("SELECT count(*) FROM users WHERE identity='local:admin'").fet
 with db: db.execute("DELETE FROM sessions")
 """
         # Docker initializes a new volume from the image's /data ownership.
-        with tempfile.TemporaryFile(dir=STATE) as data:
-            shutil.copyfileobj(full.extractfile("data.tar.gz"), data)
-            data.seek(0)
-            run("docker", "run", "-i", "--rm", "--network", "none", "-v", f"{volume}:/data",
-                "--entrypoint", "python", image("web"), "-c", extractor, stdin=data)
-    save_config({**cfg, "SECRET_KEY": meta["key"], "DATA_VOLUME": volume})
+        try:
+            with tempfile.TemporaryFile(dir=STATE) as data:
+                shutil.copyfileobj(full.extractfile("data.tar.gz"), data)
+                data.seek(0)
+                run("docker", "run", "-i", "--rm", "--network", "none", "-v", f"{volume}:/data",
+                    "--entrypoint", "python", image("web"), "-c", extractor, stdin=data)
+            save_config({**cfg, "SECRET_KEY": meta["key"], "DATA_VOLUME": volume})
+        except BaseException:
+            run("docker", "volume", "rm", volume, capture=True)
+            raise
     return cfg
 
 
@@ -134,6 +137,20 @@ def latest():
     return max(versions)[1]
 
 
+def recover_version():
+    pending = STATE / "pending.json"
+    journal = json.loads(pending.read_text())
+    old = journal["old"]
+    # A new service may already have migrated SQLite. Keep its volume and restore the snapshot separately.
+    compose("stop")
+    if git("rev-parse", "HEAD") != old:
+        git("switch", "--detach", old)
+    if journal.get("starting"):
+        restore_archive(STATE / "backups" / journal["snapshot"])
+    start()
+    pending.unlink()
+
+
 def change_version(target):
     if git("status", "--porcelain", "--untracked-files=no"):
         raise ValueError("В рабочей копии есть незакоммиченные правки.")
@@ -141,27 +158,22 @@ def change_version(target):
     new = git("rev-parse", "--verify", target + "^{commit}")
     if new == old:
         return "Уже установлена актуальная версия."
-    compose("stop")
+    pending = STATE / "pending.json"
+    journal = {"old": old, "new": new}
+    replace(pending, json.dumps(journal))
     try:
+        compose("stop")
         snapshot = backup()
-    except BaseException:
-        start()
-        raise
-    launched = False
-    try:
         git("switch", "--detach", new)
         build()
-        launched = True
+        journal.update(starting=True, snapshot=snapshot.name)
+        replace(pending, json.dumps(journal))
         start()
     except BaseException:
-        with contextlib.suppress(Exception):
-            compose("stop")
-        git("switch", "--detach", old)
-        if launched:
-            restore_archive(snapshot)
-        start()
+        recover_version()
         raise
     replace(STATE / "previous", old)
+    pending.unlink()
     return f"Установлена {new[:12]}. Копия {snapshot.name}."
 
 
@@ -210,13 +222,29 @@ def operate(action, archive=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("install", "start", "check", "update", "rollback", "backup", "restore", "status"))
+    parser.add_argument("command", choices=("install", "start", "check", "update", "rollback", "backup", "restore", "status", "recover"))
     parser.add_argument("archive", nargs="?")
     args = parser.parse_args()
     os.umask(0o077)
     with (STATE / "operation.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        print(operate(args.command, args.archive))
+        marker = STATE / "control" / "maintenance"
+        if (STATE / "pending.json").exists():
+            recover_version()
+            marker.unlink(missing_ok=True)
+        if args.command == "recover":
+            if marker.exists():
+                start()
+                marker.unlink()
+            return
+        changing = args.command in {"update", "rollback", "backup", "restore", "start", "install"}
+        if changing:
+            replace(marker, "maintenance", 0o644)
+        try:
+            print(operate(args.command, args.archive))
+        finally:
+            if changing and not (STATE / "pending.json").exists():
+                marker.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

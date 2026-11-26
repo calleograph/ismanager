@@ -31,7 +31,7 @@ IS Manager объединяет четыре локальных инструме
 | `app/redaction.py`, `app/privacy/` | Детектирование, обработка файлов и экспорт |
 | `app/passwords.py`, `app/static/passgen/` | Два способа генерации с едиными словарями |
 | `app/threats.py`, `app/threat_model/` | Анкета, расчёты и документы |
-| `scripts/manage.py`, `scripts/operator.py` | Релизы, проверка, копирование и восстановление |
+| `scripts/manage.py`, `scripts/host_helper.py` | Релизы, проверка, копирование и восстановление |
 
 ## Запуск проверок
 

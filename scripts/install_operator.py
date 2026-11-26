@@ -10,7 +10,7 @@ cfg = settings()
 unit = "ismanager-operator-" + cfg["COMPOSE_PROJECT_NAME"] + ".service"
 directory = Path.home()/".config/systemd/user" if user else Path("/etc/systemd/system")
 destination = directory / unit
-path = str(ROOT / "scripts/operator.py")
+path = str(ROOT / "scripts/host_helper.py")
 if any(c in path for c in '\n\r"\\%$'):
     raise SystemExit("Недопустимый символ в пути для службы systemd.")
 content = f"""[Unit]

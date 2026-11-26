@@ -15,6 +15,8 @@ def status(text):
 
 
 def main():
+    if (STATE / "pending.json").exists() or (STATE / "control" / "maintenance").exists():
+        subprocess.run([sys.executable, str(ROOT / "scripts/manage.py"), "recover"], cwd=ROOT)
     path = STATE / "control" / "operator.sock"
     path.unlink(missing_ok=True)
     job = None
