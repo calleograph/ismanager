@@ -1,0 +1,7 @@
+.threat-nav ol { columns: 2 15rem; }
+.threat-nav li { padding: .28rem; break-inside: avoid; }
+.threat-actions { display:flex; align-items:center; gap:1rem; flex-wrap:wrap; margin-top:1rem; }
+.threats-form details { padding-block:.6rem; }
+.threats-form summary, .threat-nav summary { cursor:pointer; }
+.threat-choice { padding:.65rem 0; }
+.threat-choice[hidden], .threat-group[hidden] { display:none; }

@@ -1,0 +1,23 @@
+name: Checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    env:
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+      PRIVACY_NLP_DIR: /tmp/ismanager-nlp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: sudo apt-get update -qq && sudo apt-get install -y tesseract-ocr-rus tesseract-ocr-eng poppler-utils
+      - run: pip install -r requirements.txt pytest playwright
+      - run: python -m app.privacy.fetch_models "$PRIVACY_NLP_DIR"
+      - run: python -m pytest -q tests
+      - run: PYTHON=$(command -v python) tests/ldap/run.sh
+      - run: python -m playwright install --with-deps chromium && python -m tests.live_web

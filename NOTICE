@@ -1,0 +1,8 @@
+IS Manager
+Copyright 2026 IS Manager contributors.
+
+Adapted LDAP client and Glass theme assets from MFA Gate.
+Copyright 2026 The MFA Gate Authors. Licensed under Apache-2.0.
+Lucide icons are ISC licensed. See app/static/icons/LICENSE-lucide.txt.
+Inter and Manrope are distributed under the SIL Open Font License.
+See app/static/fonts/OFL.txt. Additional component notices are in docs/.

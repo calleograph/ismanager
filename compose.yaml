@@ -1,0 +1,39 @@
+name: ismanager
+services:
+  web:
+    image: ${COMPOSE_PROJECT_NAME:-ismanager}-web:${APP_REVISION:-local}
+    build: .
+    environment:
+      SECRET_KEY: ${SECRET_KEY:?Запустите install.sh}
+      DATA_DIR: /data
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+    volumes:
+      - data:/data
+      - ./.runtime/control:/control:ro
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-18443}:8443"
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    init: true
+  worker:
+    image: ${COMPOSE_PROJECT_NAME:-ismanager}-worker:${APP_REVISION:-local}
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      ASR_DEVICE: ${ASR_DEVICE:-cpu}
+    volumes:
+      - data:/data
+      - models:/models
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    init: true
+volumes:
+  data:
+    name: ${DATA_VOLUME:-ismanager_data}
+  models:

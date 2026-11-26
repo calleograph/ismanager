@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}{{ steps[step-1] }} · Модели угроз{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static',filename='threats.css') }}">{% endblock %}
+{% block content %}
+<a href="{{ url_for('.index') }}">← Мои анкеты</a>
+<h1>{{ row.name }}</h1>
+<details class="panel threat-nav">
+  <summary>Шаг {{ step }} из 11 · {{ steps[step-1] }}</summary>
+  <ol>{% for title in steps %}<li>{% if loop.index <= row.stage %}<a href="{{ url_for('.edit',model_id=row.id,step=loop.index) }}" {% if step==loop.index %}aria-current="step"{% endif %}>{{ title }}</a>{% else %}{{ title }}{% endif %}</li>{% endfor %}</ol>
+</details>
+{% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
+{% macro state() -%}
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="revision" value="{{ row.revision }}">
+{%- endmacro %}
+{% if step < 11 %}
+<form class="panel threats-form" method="post"{% if step==4 %} enctype="multipart/form-data"{% endif %}>
+  {{ state() }}<h2>{{ steps[step-1] }}</h2>
+  {% for k in keys %}
+    {% set _,kind,options=fields[k] %}
+    <label>
+    {% if kind=="bool" %}<input type="checkbox" name="{{ k }}" {% if data.get(k) %}checked{% endif %}> {{ labels[k] }}
+    {% else %}
+      {{ labels[k] }}{% if k in catalog.required %} *{% endif %}
+      {% if kind=="enum" %}
+      <select name="{{ k }}"><option value="">Выберите…</option>
+        {% for value,text in options.items() %}<option value="{{ value }}" {% if data.get(k)==value %}selected{% endif %}>{{ text.split(" — ",1)[-1] }}</option>{% endfor %}
+      </select>
+      {% elif kind=="long_text" %}<textarea name="{{ k }}" rows="3" maxlength="8000">{{ data.get(k,"") }}</textarea>
+      {% else %}<input name="{{ k }}" value="{{ data.get(k,'') }}" maxlength="512">{% endif %}
+    {% endif %}
+    </label>
+  {% endfor %}
+  {% if step==1 %}
+  <fieldset><legend>Особенности системы</legend>{% for code,item in catalog.significance.items() %}
+  <label><input type="checkbox" name="flags" value="{{ code }}" {% if code in data.get('flags',[]) %}checked{% endif %}> {{ item.title }}</label>{% endfor %}</fieldset>
+  {% elif step==4 %}
+  <details><summary>Справочник средств защиты</summary>
+    {% for group in catalog.securityTools.values() %}<p>{{ group.title }} · {{ group['items']|join(', ') }}</p>{% endfor %}</details>
+  <label>Схема сети (.png или .jpg, до 2 МБ)<input type="file" name="diagram" accept="image/png,image/jpeg"></label>
+  {% if row.has_image %}<label><input type="checkbox" name="remove_diagram"> Удалить сохранённую схему</label>{% endif %}
+  {% elif step==5 %}
+  <p>Проверьте последствия, выбранные по профилю системы.</p>
+  <label>Пресет последствий <select id="consequence-preset"><option value="">Выберите профиль данных…</option>
+  {% for preset in catalog.presets.values() %}<option value="{{ preset.relevantItems|join(',') }}">{{ preset.title }}</option>{% endfor %}</select></label>
+  <button type="button" id="apply-consequences" class="secondary">Применить пресет</button>
+  {% for code,group in catalog.consequences.items() %}<fieldset><legend>{{ group.riskTitle }}</legend>
+    {% for item in group['items'] %}{% set key=code~'|'~loop.index0 %}
+    <label><input type="checkbox" name="consequences" value="{{ key }}" {% if key in data.get('consequences',recommendations.consequences) %}checked{% endif %}> {{ item.title }}</label>
+    {% endfor %}</fieldset>{% endfor %}
+  {% elif step==6 %}
+  {% for code,actor in catalog.violators.items() %}<fieldset><legend>{{ actor.title }}</legend>
+    <label><input type="checkbox" name="actors" value="{{ code }}" {% if code in data.get('actors',recommendations.actors) and (code!='foreign_intelligence' or recommendations.foreign) %}checked{% endif %} {% if code=='foreign_intelligence' and not recommendations.foreign %}disabled{% endif %}> Актуальный нарушитель</label>
+    <details><summary>Цели нарушителя</summary>{% for goal in actor.goals %}
+      <label><input type="checkbox" name="goal_{{ code }}" value="{{ loop.index0 }}" {% if goal in data.get('goals',{}).get(code,actor.goals) %}checked{% endif %}> {{ goal }}</label>
+    {% endfor %}</details>
+  </fieldset>{% endfor %}
+  {% elif step==7 %}
+  <p>243 угрозы БДУ от 18.11.2026. Сохраните профильное решение или выберите собственное основание.</p>
+  <label>Поиск по коду или названию <input type="search" id="threat-search" autocomplete="off"></label>
+  {% for batch in catalog.bank.items() | batch(20) %}<details class="threat-group" {% if loop.first %}open{% endif %}>
+    <summary>{{ batch[0][0] }} — {{ batch[-1][0] }}</summary>
+    {% for code,item in batch %}<label class="threat-choice" data-search="{{ (code ~ ' ' ~ item.name)|lower }}">{{ code }} · {{ item.name }}
+      <select name="{{ code }}"><option value="">По профилю · {{ choices[defaults[code]] }}</option>
+        {% for key,label in choices.items() %}<option value="{{ key }}" {% if key==data.get('decisions',{}).get(code) %}selected{% endif %} {% if key=='actual' and ranks[item.potential]>recommendations.rank %}disabled{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>{% endfor %}
+  </details>{% endfor %}
+  {% elif step==9 and result %}
+  <details><summary>Реализация базовых мер (УЗ-{{ result.level }}, {{ result.measures|length }} мер)</summary>
+    {% for code,item in result.measures.items() %}<label>{{ code }} · {{ item.title }}
+    <input name="measure_{{ code }}" maxlength="512" value="{{ data.get('implementations',{}).get(code,'') }}" list="templates-{{ item.group }}" placeholder="Способ реализации"></label>{% endfor %}
+    {% for code,presets in catalog.measureTemplates.items() %}<datalist id="templates-{{ code }}">{% for text in presets %}<option value="{{ text }}">{% endfor %}</datalist>{% endfor %}
+  </details>
+  {% endif %}
+  <div class="threat-actions"><button name="action" value="next">Далее</button><button name="action" value="save" class="quiet">Сохранить черновик</button>
+    {% if step>1 %}<a href="{{ url_for('.edit',model_id=row.id,step=step-1) }}">Назад</a>{% endif %}</div>
+</form>
+{% else %}
+<section class="panel"><h2>Результат</h2>
+{% if result %}<p>УЗ-{{ result.level }} · Тип угроз {{ result.type }}{% if result.crypto %} · Класс СКЗИ {{ result.crypto['class'] }}{% endif %}</p>
+<p>{{ result.basis }}</p>{% endif %}
+<details><summary>Состав комплекта · {{ docs|length }} документов</summary><ol>{% for title in docs %}<li>{{ title }}</li>{% endfor %}</ol></details>
+{% if row.ready %}<p><a href="{{ url_for('.download',model_id=row.id) }}">Скачать документы (.zip)</a></p>
+{% else %}<form method="post" action="{{ url_for('.generate',model_id=row.id) }}">{{ state() }}<button>Сформировать документы</button></form>{% endif %}
+</section>{% endif %}
+<section class="panel"><a href="{{ url_for('.export',model_id=row.id) }}">Скачать поля анкеты (.xlsx)</a>
+  <details><summary>Удалить анкету</summary>
+    <p>Анкета и сформированные документы будут удалены.</p>
+    <form method="post" action="{{ url_for('.delete',model_id=row.id) }}">{{ state() }}<button>Подтвердить удаление</button></form>
+  </details>
+</section>
+{% endblock %}
+{% block scripts %}{% if step in (5,7) %}<script src="{{ url_for('static',filename='threats.js') }}" defer></script>{% endif %}{% endblock %}

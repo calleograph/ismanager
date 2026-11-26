@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Генератор паролей{% endblock %}
+{% block content %}
+<h1>Генератор паролей</h1>
+<form class="panel" id="pass-form" method="post" action="{{ url_for('passwords.generate') }}" autocomplete="off" data-dictionary="{{ url_for('static',filename='passgen/words.json') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label>Способ генерации
+    <select name="mode"><option value="custom">Своя фраза</option><option value="dictionary">Слова из словаря</option><option value="story">Короткая история</option><option value="random">Случайные символы</option></select>
+  </label>
+  <label data-modes="custom">Ваша фраза <input name="phrase" type="text" maxlength="324" placeholder="От трёх до пяти разных слов" spellcheck="false" autocomplete="off"></label>
+  <label hidden data-modes="dictionary">Максимальная длина <input type="number" name="word_length" min="12" max="18" value="18"></label>
+  <fieldset data-modes="random" hidden>
+    <legend>Состав пароля</legend>
+    <label>Длина <input type="number" name="random_length" value="16" min="4" max="64"></label>
+    {% for name,label in [('upper','Заглавные буквы'),('lower','Строчные буквы'),('digits','Цифры'),('special','Спецсимволы'),('exclude','Исключить похожие символы')] %}
+    <label><input type="checkbox" name="{{ name }}" checked> {{ label }}</label>
+    {% endfor %}
+    <label>Набор спецсимволов <input name="specials" value="!@#$%^&amp;*+" maxlength="32" spellcheck="false"></label>
+  </fieldset>
+  <label data-modes="custom dictionary story">Положение вставки
+    <select name="position"><option value="random">Случайно</option><option value="start">В начале</option><option value="middle">Между словами</option><option value="end">В конце</option></select>
+  </label>
+  <details><summary>Где создавать пароли</summary>
+    <label>Обработчик
+      <select name="processor"><option value="browser">В этом браузере</option><option value="server">На сервере IS Manager</option></select>
+    </label>
+    <p id="pass-mode-note">Ваша фраза и полученные пароли остаются в этой вкладке.</p>
+  </details>
+  <noscript>Включите JavaScript для выбора режима и генерации в браузере.</noscript>
+  <button type="submit" disabled id="pass-generate">Создать 7 вариантов</button>
+</form>
+<p role="status" id="pass-status"></p>
+<section class="panel" id="pass-output" hidden><h2>Варианты пароля</h2><ul id="pass-results"></ul></section>
+<script src="{{ url_for('static',filename='passgen/generator.js') }}" defer></script>
+<script src="{{ url_for('static',filename='passgen/ui.js') }}" defer></script>
+{% endblock %}

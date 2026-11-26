@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Транскрибация{% endblock %}
+{% block content %}
+<h1>Транскрибация</h1>
+<div class="panel">
+  <h2>Новая запись</h2>
+  <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Аудио или видео
+      <input required type="file" name="media" accept="audio/*,video/*,.mkv,.m4a,.opus,.webm,.flac,.wma,.wmv,.amr,.3gp">
+    </label>
+    <p class="muted">До 512 МиБ и 6 часов. GigaAM распознаёт русскую речь локально.</p>
+    <button type="submit">Расшифровать запись</button>
+  </form>
+  <p class="muted">{{ model_status }}</p>
+</div>
+<section class="panel">
+  <h2>Мои записи</h2>
+  {% if jobs %}
+  <table><thead><tr><th>Файл</th><th>Состояние</th><th>Добавлен, UTC</th></tr></thead>
+  <tbody>{% for job in jobs %}<tr>
+    <td><a href="{{ url_for('.detail', job_id=job.id) }}">{{ job.filename }}</a></td>
+    <td>{{ status[job.status] }}</td><td>{{ job.created }}</td>
+  </tr>{% endfor %}</tbody></table>
+  {% else %}<p class="muted">Здесь появятся ваши записи и стенограммы.</p>{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,7 @@
+Flask==3.1.3
+gunicorn==27.0.1
+ldap3==2.9.1
+cryptography==50.0.2
+pyotp==2.12.1
+-r requirements-texttools.txt
+-r requirements-threats.txt

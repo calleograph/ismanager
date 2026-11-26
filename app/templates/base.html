@@ -1,0 +1,20 @@
+{% macro icon(name) -%}<svg class="icon" aria-hidden="true"><use href="{{ url_for('static',filename='icons/sprite.svg') }}#{{ name }}"/></svg>{%- endmacro %}
+{% set sections = [('transcription','play','Транскрибация','Аудио и видео'), ('redaction','shield-check','Обезличивание','Защита данных'), ('passwords','key-round','Пароли','Генератор паролей'), ('threats','list-checks','Модели угроз','Документы ИБ')] %}
+<!doctype html><html lang="ru" data-theme="glass"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token() }}"><meta name="color-scheme" content="light dark">
+<title>{% block title %}Рабочее пространство{% endblock %} · IS Manager</title>
+<link rel="stylesheet" href="{{ url_for('static',filename='main.css') }}"><script src="{{ url_for('static',filename='theme.js') }}"></script>
+{% block head %}{% endblock %}</head>
+<body><a class="skip" href="#main">К содержанию</a>
+{% if g.user %}<aside class="rail"><a href="{{ url_for('dashboard') }}" class="brandmark" aria-label="IS Manager — главная">IS</a>
+<nav aria-label="Разделы"><a href="{{ url_for('dashboard') }}" {% if request.endpoint=='dashboard' %}aria-current="page"{% endif %}>{{ icon('layout-dashboard') }}<span>Обзор</span></a>
+{% for key,symbol,label,kind in sections %}<a href="{{ url_for(key+'.index') }}" {% if request.blueprint==key %}aria-current="page"{% endif %}>{{ icon(symbol) }}<span>{{ label }}</span></a>{% endfor %}
+{% if g.user.admin %}<a href="{{ url_for('admin.index') }}" {% if request.blueprint=='admin' %}aria-current="page"{% endif %}>{{ icon('server') }}<span>Система</span></a>{% endif %}</nav>
+<form method="post" class="rail-end" action="{{ url_for('auth.logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="quiet" title="Выйти">{{ icon('log-out') }}<span>Выход</span></button></form></aside>{% endif %}
+<div class="shell {{ 'guest' if not g.user }}"><header class="top"><a class="brand" href="{{ url_for('dashboard') if g.user else url_for('auth.login') }}">IS Manager</a><div class="tools">
+<button id="theme" class="quiet" title="Сменить тему" aria-label="Сменить тему">{{ icon('sun') }}</button>{% if g.user %}<a class="account" href="{{ url_for('auth.account') }}">{{ icon('users-round') }} {{ g.user.display_name }}</a>{% endif %}</div></header>
+<main id="main" tabindex="-1">
+{% for category,msg in get_flashed_messages(with_categories=true) %}<p class="notice {{ category }}" role="status">{{ msg }}</p>{% endfor %}
+{% block content %}{% endblock %}</main>
+<footer><span>IS Manager</span><span>v{{ config.VERSION }}</span></footer></div>
+<script src="{{ url_for('static',filename='app.js') }}" defer></script>{% block scripts %}{% endblock %}</body></html>

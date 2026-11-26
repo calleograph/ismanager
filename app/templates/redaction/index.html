@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Обезличивание{% endblock %}
+{% block content %}
+<h1>Обезличивание</h1>
+{% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
+{% if record %}
+<section class="panel">
+  <h2>{% if preview %}Предпросмотр{% else %}Результат № {{ record.id }}{% endif %}</h2>
+  <p>{{ profiles[record.profile] }} · Замен выполнено {{ record.stats.values()|sum }}</p>
+  {% for note in record.notes %}<p>{{ note }}</p>{% endfor %}
+  <label>Обработанный текст<textarea rows="10" id="redacted-text" readonly>{{ record.result }}</textarea></label>
+  <div class="actions"><button type="button" data-copy="#redacted-text">Копировать</button>
+  {% if not preview %}<form method="get" action="{{ url_for('redaction.download', record_id=record.id) }}" class="actions">
+  <select name="format" aria-label="Формат файла">{% for fmt in ['txt','docx','xlsx','odt','ods'] %}<option value="{{ fmt }}">{{ fmt.upper() }}</option>{% endfor %}</select><button class="secondary">Скачать</button>
+  </form>{% endif %}</div>
+  {% if original %}<details><summary>Сравнить с исходным текстом</summary><textarea aria-label="Исходный текст" rows="8" readonly>{{ original }}</textarea></details>{% endif %}
+  {% if record.stats %}<details><summary>Категории замен</summary><ul>{% for key,count in record.stats.items() %}<li>{{ categories.get(key,key) }} · {{ count }}</li>{% endfor %}</ul></details>{% endif %}
+  {% if not preview %}<form method="post" action="{{ url_for('redaction.delete', record_id=record.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="secondary" type="submit" data-confirm="Удалить этот результат из истории?">Удалить результат</button></form>{% endif %}
+</section>
+{% endif %}
+<form method="post" enctype="multipart/form-data" class="panel" id="redaction-form">
+  <h2>Новая обработка</h2>
+  <input type="hidden" name="nonce" value="{{ nonce }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label>Исходный текст<textarea name="text" maxlength="60000" rows="6" placeholder="Вставьте текст для обработки"></textarea></label>
+  <label>Или загрузите файл до 12 МиБ <input type="file" name="file" accept=".{{ formats|join(',.') }}"></label>
+  <details><summary>Поддерживаемые форматы</summary><p>{{ formats|join(', ')|upper }}. Из документов извлекается текст, результат сохраняется в UTF-8. Сканы обрабатываются локальным OCR.</p></details>
+  <label>Профиль<select name="profile">{% for value,title in profiles.items() %}<option value="{{ value }}">{{ title }}</option>{% endfor %}</select></label>
+  <details><summary>Категории данных</summary>
+    <input type="hidden" name="groups_shown" value="1">
+    {% for key,group in groups.items() %}<label class="field"><input type="checkbox" name="groups" value="{{ key }}" checked> {{ group[0] }}</label>{% endfor %}
+    <p>Пароли и ключи скрываются при любом выборе.</p>
+  </details>
+  <details><summary>Дополнительные слова для замены</summary><label>По одному названию или фразе на строку<textarea name="glossary" rows="3" maxlength="4656"></textarea></label></details>
+  <p role="status" id="redaction-status"></p>
+  <div class="actions"><button type="submit">Обезличить и сохранить</button><button class="secondary" type="submit" name="preview" value="1">Предпросмотр без сохранения</button></div>
+</form>
+{% if rows %}
+<section class="panel"><h2>Мои результаты</h2><ul>{% for row in rows %}<li><a href="{{ url_for('redaction.show',record_id=row.id) }}">№ {{ row.id }} · {{ profiles[row.profile] }}</a> · {{ row.created }} UTC</li>{% endfor %}</ul></section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}<script src="{{ url_for('static',filename='redaction.js') }}" defer></script>{% endblock %}

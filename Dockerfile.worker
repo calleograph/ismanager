@@ -1,0 +1,17 @@
+FROM python:3.12-slim AS runtime
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_RETRIES=5 \
+    DATA_DIR=/data MODEL_DIR=/models ASR_DEVICE=cpu OMP_NUM_THREADS=2
+RUN apt-get -o Acquire::Retries=3 update && apt-get install -y --no-install-recommends ffmpeg ca-certificates libgomp1 && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/ismanager
+RUN pip install --index-url "${TORCH_INDEX_URL}" torch==2.8.0 torchaudio==2.8.0
+COPY requirements-worker.txt ./
+RUN pip install -r requirements-worker.txt && pip check && python -c 'import gigaam; from silero_vad import load_silero_vad; load_silero_vad(onnx=True)'
+RUN useradd --system --uid 10001 --create-home worker && install -d -o worker -g worker /data /models
+
+FROM runtime
+# The worker needs only the queue and inference code, independent of Flask and its extensions.
+COPY app/asr_store.py app/worker.py ./app/
+USER 10001
+HEALTHCHECK --interval=20s --timeout=5s --start-period=15m CMD python -m app.worker health
+CMD ["python", "-m", "app.worker"]

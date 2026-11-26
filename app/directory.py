@@ -1,0 +1,585 @@
+"""Adapted from MFA Gate (Apache-2.0). Synchronous TLS-only LDAP client for IS Manager."""
+from __future__ import annotations
+
+import contextlib
+import logging
+import re
+import socket
+import ssl
+import threading
+import time
+import uuid
+from dataclasses import dataclass, field
+
+from ldap3 import (
+    BASE,
+    FIRST,
+    NONE,
+    SIMPLE,
+    SUBTREE,
+    Connection,
+    Server,
+    ServerPool,
+    Tls,
+)
+from ldap3.core.exceptions import LDAPCertificateError, LDAPException, LDAPStartTLSError
+from ldap3.utils.config import set_config_parameter
+from ldap3.utils.conv import escape_filter_chars
+from ldap3.utils.dn import escape_rdn, parse_dn
+
+log = logging.getLogger(__name__)
+
+# ldap3 по умолчанию ждёт 10 с между проходами пула; у нас проход один (active=1), пауза только задерживала бы ответ «недоступен»
+set_config_parameter("POOLING_LOOP_TIMEOUT", 0)
+
+LDAP_MATCHING_RULE_IN_CHAIN = "1.2.840.113556.1.4.1941"
+MAX_GROUP_DEPTH = 10
+POOL_EXHAUST_SECONDS = 60
+_NO_ATTRS = ["1.1"]
+_UAC_DISABLED = 0x2
+_GROUP_CLASSES = "(|(objectClass=group)(objectClass=groupOfNames)(objectClass=groupOfUniqueNames))"
+
+CODES = frozenset({"invalid_credentials", "account_disabled", "account_locked", "password_expired", "must_change_password", "not_found",
+                   "not_allowed_group", "unavailable", "tls_error", "config_error"})
+
+# подкоды AD в diagnosticMessage ответа bind (код 49): «… data 52e, v4563»
+AD_SUBCODES = {"525": "пользователь не найден", "52e": "неверный пароль", "52f": "ограничение учётной записи", "530": "вход запрещён в это время",
+               "531": "вход запрещён с этого компьютера", "532": "срок действия пароля истёк", "533": "учётная запись отключена",
+               "701": "срок действия учётной записи истёк", "773": "нужно сменить пароль", "775": "учётная запись заблокирована"}
+_AD_CODE = {"525": "not_found", "52e": "invalid_credentials", "52f": "account_disabled", "530": "account_disabled", "531": "account_disabled",
+            "532": "password_expired", "533": "account_disabled", "701": "account_disabled", "773": "must_change_password", "775": "account_locked"}
+
+
+class LdapError(Exception):
+    """code — машинная причина (CODES); detail — для журнала администратора, без паролей."""
+
+    def __init__(self, code: str, detail: str = ""):
+        if code not in CODES:
+            raise ValueError(f"неизвестный код ошибки LDAP: {code}")
+        super().__init__(f"{code}: {detail}" if detail else code)
+        self.code, self.detail = code, detail
+
+
+@dataclass
+class DirectoryUser:
+    dn: str
+    external_id: str
+    login: str
+    display_name: str
+    email: str | None
+    phone: str | None
+    groups: list[str]   # CN и DN групп (оба), включая вложенные
+
+
+# ------------------------------------------------------------------------------------------------ чистые функции (юнит-тесты)
+def parse_login(raw: str) -> tuple[str, str | None]:
+    """(имя без домена, полное user@domain или None). Принимает sAMAccountName, UPN (user@domain), DOMAIN\\user."""
+    s = (raw or "").strip()
+    if not s or len(s) > 256 or any(ord(c) < 32 or ord(c) == 127 for c in s):
+        raise LdapError("not_found", "недопустимый логин")
+    if "\\" in s:
+        domain, _, s = s.partition("\\")
+        if not domain or not s or "\\" in s:
+            raise LdapError("not_found", "недопустимый логин")
+    if "@" in s:
+        local, _, domain = s.rpartition("@")
+        if not local or not domain:
+            raise LdapError("not_found", "недопустимый логин")
+        return local, s
+    return s, None
+
+
+def guid_to_str(raw: bytes) -> str:
+    """objectGUID AD (16 байт, первые три поля little-endian) → строка UUID, как её показывает AD."""
+    return str(uuid.UUID(bytes_le=bytes(raw)))
+
+
+def classify_bind(result: dict | None) -> str:
+    """Ответ неудачного bind → код LdapError. Подкоды AD различают блокировку, отключение, истёкший пароль."""
+    result = result or {}
+    code = result.get("result")
+    if code == 49:
+        sub = re.search(r"data ([0-9a-f]{3})", str(result.get("message") or "").lower())
+        return _AD_CODE.get(sub.group(1), "invalid_credentials") if sub else "invalid_credentials"
+    if code in (51, 52, 81, 85):            # busy, unavailable, serverDown, timeout
+        return "unavailable"
+    if code in (8, 13):                     # strongerAuthRequired, confidentialityRequired — сервер требует шифрования
+        return "tls_error"
+    return "invalid_credentials"            # прочее при bind пользователя — отказ (fail closed), причина в detail
+
+
+def bind_detail(result: dict | None) -> str:
+    """«LDAP 49 invalidCredentials; AD 52e: неверный пароль». Текст diagnosticMessage целиком не пишется."""
+    result = result or {}
+    parts = [f"LDAP {result.get('result', '?')} {result.get('description', '')}".strip()]
+    sub = re.search(r"data ([0-9a-f]{3})", str(result.get("message") or "").lower())
+    if sub:
+        parts.append(f"AD {sub.group(1)}: {AD_SUBCODES.get(sub.group(1), 'неизвестный подкод')}")
+    return "; ".join(parts)
+
+
+def _norm(name: str) -> str:
+    # shortcut: запятые внутри экранированных значений DN не учитываются; хватает для сравнения DN групп из настроек
+    return ",".join(p.strip() for p in name.split(",")).lower()
+
+
+def group_allowed(groups: list[str], allowed: list[str]) -> bool:
+    """Пусто — разрешены все. Иначе нужно пересечение по CN или DN без учёта регистра."""
+    if not allowed:
+        return True
+    have = {_norm(g) for g in groups}
+    return any(_norm(a) in have for a in allowed if a and a.strip())
+
+
+def _cn(dn: str) -> str | None:
+    try:
+        attr, value, _sep = parse_dn(dn)[0]
+    except Exception:  # noqa: BLE001 — нестандартный DN: остаётся только сам DN
+        return None
+    return re.sub(r"\\(.)", r"\1", value) if attr.lower() == "cn" else None
+
+
+def _with_cn(dns: list[str]) -> list[str]:
+    out, seen = [], set()
+    for dn in dns:
+        for name in (dn, _cn(dn)):
+            if name and name.lower() not in seen:
+                seen.add(name.lower())
+                out.append(name)
+    return out
+
+
+# ------------------------------------------------------------------------------------------------ настройки
+@dataclass(frozen=True)
+class DirectoryConfig:
+    id: str
+    kind: str
+    hosts: tuple[str, ...]
+    port: int
+    encryption: str
+    ca_cert: str
+    bind_dn: str
+    bind_password: str = field(repr=False)
+    base_dn: str = ""
+    user_filter: str = ""
+    login_attr: str = "sAMAccountName"
+    id_attr: str = "objectGUID"
+    name_attr: str = "displayName"
+    email_attr: str = "mail"
+    phone_attr: str = "mobile"
+    nested: bool = True
+    allowed: tuple[str, ...] = ()
+    timeout: int = 5
+
+
+class VerifiedTLS(Tls):
+    """Use OpenSSL's DNS and IP subjectAltName verification on Python 3.12+."""
+
+    def wrap_socket(self, connection, do_handshake=False):
+        context = ssl.create_default_context(cadata=self.ca_certs_data)
+        connection.socket = context.wrap_socket(connection.socket, server_hostname=connection.server.host,
+                                                do_handshake_on_connect=do_handshake)
+
+
+def _server(cfg: DirectoryConfig, host: str) -> Server:
+    return Server(host, port=cfg.port, use_ssl=cfg.encryption == "ldaps", tls=VerifiedTLS(validate=ssl.CERT_REQUIRED, ca_certs_data=cfg.ca_cert or None), connect_timeout=cfg.timeout, get_info=NONE)
+
+
+_pools: dict[str, tuple[tuple, ServerPool]] = {}
+_pools_lock = threading.Lock()
+
+
+def _pool(cfg: DirectoryConfig) -> ServerPool:
+    """Пул на каталог: состояние «контроллер недоступен» живёт POOL_EXHAUST_SECONDS и переживает отдельные входы."""
+    key = (cfg.hosts, cfg.port, cfg.encryption, cfg.ca_cert, cfg.timeout)
+    with _pools_lock:
+        cached = _pools.get(cfg.id)
+        if cached is None or cached[0] != key:
+            # active=1 — один проход по контроллерам; active=True в ldap3 перебирает их бесконечно, и вход зависал бы при отказе всех
+            cached = (key, ServerPool([_server(cfg, h) for h in cfg.hosts], FIRST, active=1, exhaust=POOL_EXHAUST_SECONDS))
+            _pools[cfg.id] = cached
+        pool = cached[1]
+        state = pool._pool_state
+        if state is not None and not any(s.available for s in state.server_states):
+            for s in state.server_states:   # все помечены недоступными — пробуем снова, а не отказываем 60 с без попытки
+                s.available = True
+    return pool
+
+
+def _exc_text(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
+_TLS_WORDS = ("certificate", "verify failed", "hostname", "handshake", "wrong version", "unknown protocol", "tlsv1 alert", "sslv3 alert", "starttls")
+
+
+def _transport_error(exc: BaseException) -> LdapError:
+    text = _exc_text(exc)
+    short = text if len(text) <= 300 else text[:297] + "…"
+    if isinstance(exc, (LDAPCertificateError, LDAPStartTLSError, ssl.SSLCertVerificationError)) or any(w in text.lower() for w in _TLS_WORDS):
+        return LdapError("tls_error", short)
+    if "server pool" in text.lower():
+        return LdapError("unavailable", "ни один контроллер не ответил")
+    return LdapError("unavailable", short)
+
+
+def _close(conn: Connection | None) -> None:
+    if conn is None:
+        return
+    with contextlib.suppress(Exception):
+        conn.unbind()
+    if conn.server_pool is not None:
+        conn.server_pool.pool_states.pop(conn, None)   # ldap3 сам не удаляет соединения из пула — без этого утечка памяти
+
+
+def _connect(cfg: DirectoryConfig, user: str, password: str, server: Server | ServerPool | None = None) -> Connection:
+    """Открытое соединение после успешного simple bind. Пустой пароль — отказ без обращения к серверу."""
+    if not password:
+        raise LdapError("invalid_credentials", "пустой пароль")
+    conn = Connection(server or _pool(cfg), user=user, password=password.encode("utf-8"), authentication=SIMPLE, auto_bind=False, raise_exceptions=False,
+                      read_only=True, receive_timeout=cfg.timeout, auto_referrals=False)
+    try:
+        conn.open(read_server_info=False)
+        if cfg.encryption == "starttls" and not conn.start_tls(read_server_info=False):
+            raise LdapError("tls_error", "сервер отклонил STARTTLS")
+        ok = conn.bind(read_server_info=False)
+    except LdapError:
+        _close(conn)
+        raise
+    except (LDAPException, OSError) as exc:
+        _close(conn)
+        raise _transport_error(exc) from None
+    finally:
+        conn.password = None
+    if not ok:
+        result = conn.result
+        _close(conn)
+        raise LdapError(classify_bind(result), bind_detail(result))
+    return conn
+
+
+def _service(cfg: DirectoryConfig, server=None) -> Connection:
+    """Bind сервисной записью. Её отказ — ошибка настройки, а не «неверный пароль» пользователя."""
+    try:
+        return _connect(cfg, cfg.bind_dn, cfg.bind_password, server)
+    except LdapError as exc:
+        if exc.code in ("unavailable", "tls_error"):
+            raise
+        raise LdapError("config_error", f"сервисная учётная запись {cfg.bind_dn} не вошла: {exc.detail or exc.code}") from None
+
+
+def _self_bind_name(cfg: DirectoryConfig, login: str) -> str:
+    """Имя для bind пользователем, когда сервисной записи нет. AD принимает UPN и DOMAIN\\user; OpenLDAP — только DN."""
+    name, upn = parse_login(login)
+    if cfg.kind == "ad":
+        if "\\" in login or upn:
+            return login.strip()
+        domain = ".".join(v for a, v, _s in parse_dn(cfg.base_dn) if a.lower() == "dc")
+        if not domain:
+            raise LdapError("config_error", "без bind_dn вход по короткому имени требует base_dn вида DC=corp,DC=example")
+        return f"{name}@{domain}"
+    value = upn if (upn and cfg.login_attr.lower() == "mail") else name
+    return f"{cfg.login_attr}={escape_rdn(value)},{cfg.base_dn}"
+
+
+# ------------------------------------------------------------------------------------------------ поиск и группы
+def _values(entry: dict, attr: str) -> list:
+    v = (entry.get("attributes") or {}).get(attr)
+    return v if isinstance(v, list) else ([] if v in (None, "", b"") else [v])
+
+
+def _first(entry: dict, attr: str) -> str | None:
+    for v in _values(entry, attr):
+        s = (v.decode("utf-8", "replace") if isinstance(v, bytes) else str(v)).strip()
+        if s:
+            return s
+    return None
+
+
+def _attrs(cfg: DirectoryConfig) -> list[str]:
+    names = [cfg.login_attr, cfg.id_attr, cfg.name_attr, cfg.email_attr, cfg.phone_attr, "memberOf"]
+    if cfg.kind == "ad":
+        names += ["userAccountControl", "userPrincipalName"]
+    return list(dict.fromkeys(names))
+
+
+def user_filter(cfg: DirectoryConfig, login: str) -> str:
+    name, upn = parse_login(login)
+    conds = [f"({cfg.login_attr}={escape_filter_chars(name)})"]
+    if upn:
+        conds.append(f"({cfg.login_attr}={escape_filter_chars(upn)})")
+        if cfg.kind == "ad":
+            conds.append(f"(userPrincipalName={escape_filter_chars(upn)})")
+    cond = conds[0] if len(conds) == 1 else "(|" + "".join(conds) + ")"
+    base = cfg.user_filter
+    if base and not base.startswith("("):
+        base = f"({base})"
+    return f"(&{base}{cond})" if base else cond
+
+
+def _search_failed(conn: Connection, what: str) -> LdapError:
+    res = conn.result or {}
+    code = res.get("result")
+    if code in (51, 52, 81, 85):
+        return LdapError("unavailable", f"{what}: LDAP {code} {res.get('description', '')}")
+    if code == 32:
+        return LdapError("config_error", f"{what}: base DN не найден")
+    return LdapError("config_error", f"{what}: LDAP {code} {res.get('description', '')}".strip())
+
+
+def _find(conn: Connection, cfg: DirectoryConfig, login: str) -> dict | None:
+    """Запись пользователя или None. Несколько записей — not_found (неоднозначность не угадываем), кроме точного совпадения UPN."""
+    try:
+        conn.search(cfg.base_dn, user_filter(cfg, login), search_scope=SUBTREE, attributes=_attrs(cfg), size_limit=3)
+    except LDAPException as exc:
+        raise _transport_error(exc) from None
+    entries = [e for e in (conn.response or []) if e.get("type") == "searchResEntry"]
+    if (conn.result or {}).get("result") not in (0, 4) and not entries:   # 4 — sizeLimitExceeded
+        raise _search_failed(conn, "поиск пользователя")
+    if len(entries) > 1:
+        _name, upn = parse_login(login)
+        exact = [e for e in entries if upn and any(str(v).lower() == upn.lower() for a in ("userPrincipalName", cfg.login_attr) for v in _values(e, a))]
+        if len(exact) == 1:
+            return exact[0]
+        raise LdapError("not_found", f"под логин подходит несколько записей ({len(entries)}); уточните user_filter")
+    return entries[0] if entries else None
+
+
+def _find_self(conn: Connection, cfg: DirectoryConfig, login: str) -> dict | None:
+    """Своя запись после bind пользователем. OpenLDAP: DN известен — читаем его (правила «by self read» не открывают base_dn)."""
+    if cfg.kind == "ad":
+        return _find(conn, cfg, login)
+    try:
+        conn.search(_self_bind_name(cfg, login), "(objectClass=*)", search_scope=BASE, attributes=_attrs(cfg))
+    except LDAPException as exc:
+        raise _transport_error(exc) from None
+    return next((e for e in (conn.response or []) if e.get("type") == "searchResEntry"), None)
+
+
+def _check_enabled(cfg: DirectoryConfig, entry: dict) -> None:
+    uac = _first(entry, "userAccountControl") if cfg.kind == "ad" else None
+    if uac and uac.isdigit() and int(uac) & _UAC_DISABLED:
+        raise LdapError("account_disabled", "userAccountControl: ACCOUNTDISABLE")
+
+
+def _ad_groups(conn: Connection, cfg: DirectoryConfig, dn: str, member_of: list[str]) -> list[str]:
+    if cfg.nested:
+        flt = f"(&(objectClass=group)(member:{LDAP_MATCHING_RULE_IN_CHAIN}:={escape_filter_chars(dn)}))"
+        try:
+            found = [str(e["dn"]) for e in conn.extend.standard.paged_search(cfg.base_dn, flt, search_scope=SUBTREE, attributes=_NO_ATTRS,
+                                                                             paged_size=500, generator=True) if e.get("type") == "searchResEntry"]
+            if (conn.result or {}).get("result") == 0:
+                return found + member_of
+            code = (conn.result or {}).get("result")
+        except Exception as exc:  # noqa: BLE001
+            code = type(exc).__name__
+        # неполный список групп мог бы обойти запрещающие политики и исключения — отказ, как в _walk_groups
+        log.warning("LDAP_MATCHING_RULE_IN_CHAIN не выполнен (%s): вход отклонён", code)
+        raise LdapError("unavailable", f"не удалось вычислить вложенные группы ({code})")
+    return member_of
+
+
+def _walk_groups(conn: Connection, cfg: DirectoryConfig, dn: str, member_of: list[str]) -> list[str]:
+    """OpenLDAP: группы, где участник — пользователь, затем группы этих групп; глубина ≤ MAX_GROUP_DEPTH, каждая группа один раз."""
+    found: dict[str, str] = {g.lower(): g for g in member_of}
+    frontier = [dn, *member_of] if cfg.nested else [dn]
+    for _level in range(MAX_GROUP_DEPTH if cfg.nested else 1):
+        nxt: list[str] = []
+        for i in range(0, len(frontier), 50):   # фильтр из десятков условий, а не из тысяч
+            ors = "".join(f"(member={escape_filter_chars(x)})(uniqueMember={escape_filter_chars(x)})" for x in frontier[i:i + 50])
+            try:
+                conn.search(cfg.base_dn, f"(&{_GROUP_CLASSES}(|{ors}))", search_scope=SUBTREE, attributes=_NO_ATTRS)
+            except LDAPException as exc:
+                raise _transport_error(exc) from None
+            if (conn.result or {}).get("result") not in (0, 4):
+                raise _search_failed(conn, "поиск групп")   # неполный список групп мог бы обойти запрещающие политики
+            for e in conn.response or []:
+                if e.get("type") == "searchResEntry" and str(e["dn"]).lower() not in found:
+                    found[str(e["dn"]).lower()] = str(e["dn"])
+                    nxt.append(str(e["dn"]))
+        if not nxt:
+            break
+        frontier = nxt
+    return list(found.values())
+
+
+def _groups(conn: Connection, cfg: DirectoryConfig, entry: dict) -> list[str]:
+    member_of = [str(v) for v in _values(entry, "memberOf")]
+    dns = _ad_groups(conn, cfg, str(entry["dn"]), member_of) if cfg.kind == "ad" else _walk_groups(conn, cfg, str(entry["dn"]), member_of)
+    return _with_cn(dns)
+
+
+def external_id(cfg: DirectoryConfig, entry: dict) -> str:
+    """objectGUID (байты) → UUID-строка; прочие атрибуты (entryUUID, uid…) — как есть. Без устойчивого идентификатора вход не выполняется."""
+    if cfg.id_attr.lower() == "objectguid":
+        raw = ((entry.get("raw_attributes") or {}).get(cfg.id_attr) or [b""])[0]
+        if isinstance(raw, (bytes, bytearray)) and len(raw) == 16:
+            return guid_to_str(raw)
+    else:
+        value = _first(entry, cfg.id_attr)
+        if value:
+            return value
+    raise LdapError("config_error", f"у записи нет атрибута-идентификатора {cfg.id_attr}")
+
+
+def _user(cfg: DirectoryConfig, entry: dict, groups: list[str], login: str) -> DirectoryUser:
+    name = _first(entry, cfg.login_attr) or parse_login(login)[0]
+    return DirectoryUser(dn=str(entry["dn"]), external_id=external_id(cfg, entry), login=name, display_name=_first(entry, cfg.name_attr) or name,
+                         email=_first(entry, cfg.email_attr), phone=_first(entry, cfg.phone_attr), groups=groups)
+
+
+def _finish(conn: Connection, cfg: DirectoryConfig, entry: dict, login: str) -> DirectoryUser:
+    user = _user(cfg, entry, _groups(conn, cfg, entry), login)
+    if not group_allowed(user.groups, list(cfg.allowed)):
+        raise LdapError("not_allowed_group", f"{user.login} не входит ни в одну из разрешённых групп")
+    return user
+
+
+# ------------------------------------------------------------------------------------------------ синхронные операции
+def authenticate(cfg: DirectoryConfig, login: str, password: str) -> DirectoryUser:
+    if not cfg.bind_dn:   # без сервисной записи: bind самим пользователем, затем чтение своей записи его же правами
+        conn = _connect(cfg, _self_bind_name(cfg, login), password)
+        try:
+            entry = _find_self(conn, cfg, login)
+            if entry is None:
+                raise LdapError("not_found", "пароль принят, но своя запись пользователю не видна (проверьте base_dn и права чтения)")
+            return _finish(conn, cfg, entry, login)
+        finally:
+            _close(conn)
+    svc = _service(cfg)
+    try:
+        entry = _find(svc, cfg, login)
+        if entry is None:
+            raise LdapError("not_found")
+        _check_enabled(cfg, entry)
+        _close(_connect(cfg, str(entry["dn"]), password))
+        return _finish(svc, cfg, entry, login)
+    finally:
+        _close(svc)
+
+
+def lookup(cfg: DirectoryConfig, login: str, check: bool) -> DirectoryUser | None:
+    if not cfg.bind_dn:
+        raise LdapError("config_error", "поиск без пароля пользователя требует сервисной учётной записи (bind_dn)")
+    svc = _service(cfg)
+    try:
+        entry = _find(svc, cfg, login)
+        if entry is None:
+            return None
+        if check:
+            _check_enabled(cfg, entry)
+            return _finish(svc, cfg, entry, login)
+        return _user(cfg, entry, _groups(svc, cfg, entry), login)
+    finally:
+        _close(svc)
+
+
+def diagnose(cfg: DirectoryConfig, login: str | None, password: str | None) -> list[dict]:
+    steps: list[dict] = []
+
+    def step(name: str, ok: bool, detail: str, t0: float, host: str = "", warn: bool = False) -> bool:
+        # warn — шаг пройден, но настройка небезопасна (без шифрования или без проверки сертификата)
+        steps.append({"step": name, "ok": ok, "warn": ok and warn, "detail": detail, "ms": int((time.perf_counter() - t0) * 1000), "host": host})
+        return ok
+
+    healthy: list[str] = []
+    for host in cfg.hosts:
+        t = time.perf_counter()
+        try:
+            addr = socket.getaddrinfo(host, cfg.port, type=socket.SOCK_STREAM)[0][4][0]
+            step("dns", True, f"{host} → {addr}", t, host)
+        except OSError as exc:
+            step("dns", False, f"имя {host} не разрешается ({exc.strerror or type(exc).__name__})", t, host)
+            continue
+        t = time.perf_counter()
+        try:
+            socket.create_connection((host, cfg.port), timeout=cfg.timeout).close()
+            step("tcp", True, f"порт {cfg.port} открыт", t, host)
+        except OSError as exc:
+            step("tcp", False, f"нет соединения с {host}:{cfg.port} ({exc.strerror or type(exc).__name__}): порт, межсетевой экран, маршрут", t, host)
+            continue
+        t = time.perf_counter()
+        conn = Connection(_server(cfg, host), auto_bind=False, raise_exceptions=False, read_only=True, receive_timeout=cfg.timeout, auto_referrals=False)
+        try:
+            conn.open(read_server_info=False)
+            if cfg.encryption == "starttls" and not conn.start_tls(read_server_info=False):
+                raise LdapError("tls_error", "сервер отклонил STARTTLS")
+            version = conn.socket.version() if hasattr(conn.socket, "version") else "TLS"
+            trust = "сертификат проверен"
+            step("tls", True, f"{cfg.encryption}, {version}, {trust}", t, host)
+        except LdapError as exc:
+            step("tls", False, exc.detail, t, host)
+            continue
+        except (LDAPException, OSError) as exc:
+            step("tls", False, _transport_error(exc).detail, t, host)
+            continue
+        finally:
+            _close(conn)
+        healthy.append(host)
+    if not healthy:
+        return steps
+
+    pool = ServerPool([_server(cfg, h) for h in healthy], FIRST, active=1)   # свежий пул: диагностика не наследует «исключённые» узлы
+    t = time.perf_counter()
+    if cfg.bind_dn:
+        try:
+            conn = _service(cfg, pool)
+        except LdapError as exc:
+            step("bind", False, exc.detail, t)
+            return steps
+        step("bind", True, f"сервисная учётная запись {cfg.bind_dn} вошла", t, conn.server.host)
+    elif login and password:
+        try:
+            conn = _connect(cfg, _self_bind_name(cfg, login), password, pool)
+        except LdapError as exc:
+            step("bind", False, f"bind_dn не задан, bind пользователем: {exc.code} ({exc.detail})", t)
+            return steps
+        step("bind", True, "bind_dn не задан: пользователь вошёл своим паролем, поиск выполняется его правами", t, conn.server.host)
+    else:
+        step("bind", False, "bind_dn не задан: для проверки укажите логин и пароль пользователя", t)
+        return steps
+    host = conn.server.host
+    try:
+        t = time.perf_counter()
+        try:
+            ok = conn.search(cfg.base_dn, "(objectClass=*)", search_scope=BASE, attributes=_NO_ATTRS)
+        except LDAPException as exc:
+            ok, conn.result = False, {"description": _transport_error(exc).detail}
+        if not step("base_dn", bool(ok), f"{cfg.base_dn} доступен для чтения" if ok else
+                    f"{cfg.base_dn} не читается ({(conn.result or {}).get('description', 'ошибка')}): проверьте значение и права", t, host):
+            return steps
+        if not login:
+            return steps
+        t = time.perf_counter()
+        try:
+            entry = _find(conn, cfg, login) if cfg.bind_dn else _find_self(conn, cfg, login)
+        except LdapError as exc:
+            step("user_search", False, f"{exc.code}: {exc.detail}", t, host)
+            return steps
+        if not step("user_search", entry is not None, f"найден {entry['dn']}" if entry else f"«{login}» не найден по фильтру {user_filter(cfg, login)}", t, host):
+            return steps
+        if password and cfg.bind_dn:
+            t = time.perf_counter()
+            try:
+                _check_enabled(cfg, entry)
+                _close(_connect(cfg, str(entry["dn"]), password, pool))
+                step("user_bind", True, "пароль пользователя принят", t, host)
+            except LdapError as exc:
+                step("user_bind", False, f"{exc.code}: {exc.detail}" if exc.detail else exc.code, t, host)
+                return steps
+        elif password:
+            step("user_bind", True, "пароль пользователя принят (bind пользователем выше)", t, host)
+        t = time.perf_counter()
+        try:
+            groups = _groups(conn, cfg, entry)
+        except LdapError as exc:
+            step("groups", False, f"{exc.code}: {exc.detail}", t, host)
+            return steps
+        dns = [g for g in groups if "=" in g]
+        shown = ", ".join(_cn(g) or g for g in dns[:20]) + (" …" if len(dns) > 20 else "")
+        allowed = group_allowed(groups, list(cfg.allowed))
+        step("groups", allowed, f"групп с учётом вложенности: {len(dns)} ({shown or 'нет'})" +
+             ("" if allowed else "; ни одна не входит в allowed_groups — вход будет отклонён"), t, host)
+        return steps
+    finally:
+        _close(conn)

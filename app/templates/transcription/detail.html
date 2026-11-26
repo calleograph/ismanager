@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ job.filename }} · Транскрибация{% endblock %}
+{% block content %}
+<a href="{{ url_for('.index') }}">← Мои записи</a>
+<h1>{{ job.filename }}</h1>
+<section class="panel">
+  <h2>{{ status[job.status] }}</h2>
+  {% if job.status in ('queued','running') %}
+    <div data-asr-refresh>
+    {% if job.status == 'running' %}
+      <label>Обработано {{ job.seconds }} с{% if job.progress %} · {{ job.progress }}%{% endif %}
+        <progress max="100" {% if job.progress %}value="{{ job.progress }}"{% endif %}></progress>
+      </label>
+    {% endif %}
+    <p class="muted">{{ model_status }}</p>
+    <a href="{{ url_for('.detail', job_id=job.id) }}">Обновить состояние</a>
+    </div>
+  {% elif job.status == 'failed' %}
+    <p role="alert">{{ job.error }}</p>
+    <form action="{{ url_for('.retry', job_id=job.id) }}" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit">Повторить обработку</button>
+    </form>
+  {% else %}
+    <form action="{{ url_for('.save', job_id=job.id) }}" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="revision" value="{{ job.revision }}">
+      <label>Стенограмма <textarea id="asr-text" name="body" required rows="14" maxlength="2000000">{{ job.body }}</textarea></label>
+      <button type="submit">Сохранить правки</button>
+      <button type="button" data-copy="#asr-text">Скопировать текст</button>
+      <a href="{{ url_for('.export', job_id=job.id) }}">Скачать TXT</a>
+    </form>
+    {% if job.revision %}<details><summary>Исходное распознавание</summary><pre>{{ job.original }}</pre></details>{% endif %}
+  {% endif %}
+</section>
+{% if job.status != 'running' %}
+<details class="panel">
+  <summary>Удалить запись</summary>
+  <p>Исходный файл и стенограмма будут удалены.</p>
+  <form action="{{ url_for('.delete', job_id=job.id) }}" method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">Удалить окончательно</button>
+  </form>
+</details>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+{% if job.status in ('queued','running') %}<script defer src="{{ url_for('static', filename='transcription.js') }}"></script>{% endif %}
+{% endblock %}

@@ -1,0 +1,2 @@
+gigaam @ https://codeload.github.com/salute-developers/GigaAM/zip/7447938d791c4f3e643386ee22c33777004293a5
+silero-vad==6.2.3

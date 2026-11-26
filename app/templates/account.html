@@ -1,0 +1,11 @@
+{% extends 'base.html' %}{% block title %}Учётная запись{% endblock %}{% block content %}
+<h1>{{ g.user.display_name }}</h1>
+{% if g.user.password %}<section class="panel"><h2>{{ 'Замените первичный пароль' if g.user.must_change else 'Сменить пароль' }}</h2>
+<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="password">
+<label>Текущий пароль<input type="password" name="current" autocomplete="current-password" required></label>
+<label>Новый пароль<input type="password" name="new" minlength="12" autocomplete="new-password" required></label><label>Повторите новый пароль<input type="password" name="repeat" autocomplete="new-password" required></label><button>Сохранить пароль</button></form></section>{% endif %}
+{% if not g.user.must_change %}<section class="panel"><h2>Двухфакторная защита</h2><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+{% if g.user.totp %}<label>Текущий код<input name="code" autocomplete="one-time-code" required></label><button name="action" value="disable">Отключить защиту</button>
+{% elif pending %}<p>Добавьте ключ в приложение-аутентификатор и введите шестизначный код.</p><code>{{ pending }}</code><label>Код<input name="code" autocomplete="one-time-code" required></label><button name="action" value="enable">Подтвердить</button>
+{% else %}<button class="secondary" name="action" value="prepare">Подключить аутентификатор</button>{% endif %}</form></section>{% endif %}
+<form method="post" action="{{ url_for('auth.logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="secondary">Выйти из системы</button></form>{% endblock %}
