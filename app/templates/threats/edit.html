@@ -35,7 +35,7 @@
       <span>Шаг {{ step }} из 11</span>
       <progress value="{{ step }}" max="11" aria-label="Прогресс анкеты"></progress>
     </header>
-{% if error %}<p class="notice error" role="alert" id="threat-error"{% if not missing %} tabindex="-1" autofocus{% endif %}>{{ error }}</p>{% endif %}
+{% if error and not error_field %}<p class="notice error" role="alert" id="threat-error"{% if not missing %} tabindex="-1" autofocus{% endif %}>{{ error }}</p>{% endif %}
 {% if step < 11 %}
 <form data-warn-unsaved class="threats-form" id="threat-form" method="post" action="{{ url_for('.edit',model_id=row.id,step=step) if row else url_for('.new') }}"{% if step in (1,4) %} enctype="multipart/form-data"{% endif %}>
   {{ state() }}
@@ -59,7 +59,8 @@
   {% if step==4 %}
   <details><summary>Справочник средств защиты</summary>
     {% for group in catalog.securityTools.values() %}<p>{{ group.title }} · {{ group['items']|join(', ') }}</p>{% endfor %}</details>
-  <label>Схема сети (.png или .jpg, до 2 МБ)<input type="file" name="diagram" accept="image/png,image/jpeg"></label>
+  <label>Схема сети (.png или .jpg, до 2 МБ)<input type="file" name="diagram" accept="image/png,image/jpeg"{% if error_field == 'diagram' %} aria-invalid="true" aria-describedby="diagram-error" autofocus{% endif %}></label>
+  {% if error_field == 'diagram' %}<p class="notice error" role="alert" id="diagram-error">{{ error }}</p>{% endif %}
   {% if row.has_image %}<label><input type="checkbox" name="remove_diagram"> Удалить сохранённую схему</label>{% endif %}
   {% elif step==5 %}
   <p>Проверьте последствия, выбранные по профилю системы.</p>

@@ -8,6 +8,11 @@
   <section class="panel" id="asr-result" data-state="{{ job.status }}">
     {% if job.status == 'done' %}
     <div class="asr-heading"><h2>Стенограмма</h2><span>Готово · {{ report.seconds }} с аудио</span></div>
+    {% if conflict_body is defined %}
+    <p class="notice error" role="alert" id="asr-conflict">Стенограмма изменилась в другой вкладке. Перенесите нужные правки из вашего варианта в поле «Текст записи» и сохраните.</p>
+    <label for="asr-conflict-body">Ваш несохранённый вариант</label>
+    <textarea id="asr-conflict-body" readonly rows="4" aria-describedby="asr-conflict" autofocus>{{ conflict_body }}</textarea>
+    {% endif %}
     <form data-asr-editor data-warn-unsaved action="{{ url_for('.save', job_id=job.id) }}" method="post">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="revision" value="{{ job.revision }}">
@@ -16,7 +21,8 @@
         <button type="button" class="secondary" data-copy="#asr-text">Скопировать текст</button>
       </div>
       <label for="asr-text">Текст записи</label>
-      <textarea id="asr-text" name="body" required rows="6" maxlength="2000000">{{ job.body }}</textarea>
+      <textarea id="asr-text" name="body" required rows="6" maxlength="2000000"{% if edit_error %} aria-invalid="true" aria-describedby="asr-edit-error" autofocus{% endif %}>{{ edited_body|default(job.body) }}</textarea>
+      {% if edit_error %}<p class="notice error" role="alert" id="asr-edit-error">{{ edit_error }}</p>{% endif %}
       <button type="submit" class="secondary">Сохранить правки</button>
       <span class="muted" data-pending-edits role="status"></span>
     </form>

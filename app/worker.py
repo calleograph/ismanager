@@ -124,9 +124,9 @@ def probe(path):
         result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
         info = json.loads(result.stdout)
     except (subprocess.SubprocessError, ValueError) as exc:
-        raise RecordingError("Не удалось открыть запись. Проверьте формат и целостность файла.") from exc
+        raise RecordingError("Не удалось открыть запись. Проверьте, воспроизводится ли она у вас. Сохраните копию в MP3 или WAV и выберите её для распознавания.") from exc
     if not info.get("streams"):
-        raise RecordingError("В файле нет звуковой дорожки.")
+        raise RecordingError("В файле нет звуковой дорожки. Выберите видео со звуком или отдельную аудиозапись.")
     try:
         duration = float(info.get("format", {}).get("duration", ""))
     except ValueError:
@@ -150,7 +150,7 @@ def decode(path):
                     break
                 yield chunk
             if proc.wait(timeout=30):
-                raise RecordingError("Аудиодорожка повреждена или кодек не поддерживается.")
+                raise RecordingError("Не удалось прочитать звуковую дорожку. Сохраните её в MP3 или WAV и загрузите полученный файл.")
         finally:
             if proc.poll() is None:
                 proc.kill()
@@ -234,7 +234,7 @@ def recover(db):
                 finished_at=CASE WHEN recoveries>0 THEN unixepoch() END,
                 started_at=CASE WHEN recoveries>0 THEN started_at END,
                 recognizing_at=CASE WHEN recoveries>0 THEN recognizing_at END,
-                error=CASE WHEN recoveries=0 THEN '' ELSE 'Обработка повторно прервалась. Проверьте журнал worker и повторите.' END
+                error=CASE WHEN recoveries=0 THEN '' ELSE 'Обработка дважды прервалась. Нажмите «Повторить обработку». Если ошибка повторится, сообщите администратору время сбоя.' END
             WHERE status='running'
         """)
 
@@ -258,7 +258,7 @@ def work(db, data_dir, engine):
         raise
     except Exception as exc:
         LOG.error("Recording %s failed (%s)", job_id, type(exc).__name__)
-        error = str(exc) if isinstance(exc, RecordingError) else "Сбой распознавания. Проверьте сервис worker и повторите."
+        error = str(exc) if isinstance(exc, RecordingError) else "Сбой распознавания. Нажмите «Повторить обработку». Если ошибка повторится, сообщите администратору время сбоя."
         with db:
             db.execute("UPDATE transcripts SET status='failed',finished_at=unixepoch(),error=? WHERE id=?", (error, job_id))
     else:

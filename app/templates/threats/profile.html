@@ -2,11 +2,12 @@
   <h2>Параметры системы</h2>
   <div class="threat-excel">
     <label class="btn secondary threat-upload">{{ icon('scroll-text') }} Загрузить заполненный файл
-      <input type="file" name="sheet" id="threat-sheet" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+      <input type="file" name="sheet" id="threat-sheet" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"{% if error_field == 'sheet' %} aria-invalid="true" aria-describedby="sheet-error" autofocus{% endif %}>
     </label>
     <a href="{{ url_for('.blank') }}">Скачать пример шаблона (Excel)</a>
     <noscript><button name="action" value="import">Применить файл</button></noscript>
   </div>
+  {% if error_field == 'sheet' %}<p class="notice error" role="alert" id="sheet-error">{{ error }}</p>{% endif %}
   <details class="threat-sheet-help"><summary>Как заполнить шаблон</summary>
     <p>Откройте таблицу в Excel или LibreOffice Calc. Заполните столбец B, сохранив названия полей в столбце A. Для полей со списком выберите значение в ячейке.</p>
   </details>

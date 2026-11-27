@@ -4,7 +4,7 @@
 .redact-workspace .panel{min-width:0;margin:0}
 .redact-workspace,.redact-result{margin-bottom:16px}
 .redact-workspace h2,.redact-result h2{margin-top:0}
-.redact-workspace p:empty,.redact-result p:empty,#batch-upload-status:empty{display:none}
+.redact-workspace p:empty,.redact-result p:empty,#batch-upload-status:empty,#batch-upload-error:empty{display:none}
 .redact-workspace .actions,.redact-result>.actions{margin-top:15px}
 .redact-settings{margin-top:12px}
 .redact-settings fieldset{padding:0;margin:12px 0;border:0}

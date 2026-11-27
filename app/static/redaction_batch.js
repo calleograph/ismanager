@@ -7,11 +7,10 @@
   const prefix = form.elements.nonce.value.slice(0, 16);
   const ready = new WeakSet();
   const keys = new WeakMap();
-  const label = form.querySelector('.batch-js');
-  if (label) label.hidden = false;
   field.multiple = true;
   const starting = form.hasAttribute('data-create');
   const status = document.getElementById('batch-upload-status');
+  const errorBox = document.getElementById('batch-upload-error');
   const link = document.getElementById('batch-upload-link');
   const formats = new Set(form.dataset.formats.split(','));
   let counter = 0;
@@ -24,11 +23,16 @@
 
 
   async function post(url, options) {
-    const response = await fetch(url, {method: 'POST', credentials: 'same-origin', cache: 'no-store', ...options});
-    if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) {
-      throw new Error('Передача не подтверждена. Проверьте соединение и вход в IS Manager, затем повторите загрузку.');
+    let response, result;
+    try {
+      response = await fetch(url, {method: 'POST', credentials: 'same-origin', cache: 'no-store', ...options,
+        headers: {...options.headers, Accept: 'application/json'}});
+      if (response.headers.get('content-type')?.includes('application/json')) result = await response.json();
+    } catch {
+      throw new Error('Ответ сервера не получен. Проверьте соединение и повторите действие в этой вкладке.');
     }
-    return response.json();
+    if (!response.ok || !result) throw new Error(result?.error || 'Сервер не подтвердил действие. Откройте пакет из истории и проверьте его состояние.');
+    return result;
   }
 
   // Only rejected files need a metadata hint: accepted files are identified by
@@ -52,10 +56,7 @@
     const button = deletion.querySelector('button');
     button.disabled = true;
     try {
-      const res = await fetch(deletion.action,{method:'POST',credentials:'same-origin',headers:{Accept:'application/json','X-CSRF-Token':csrf}});
-      if (res.status===409) throw new Error('Пакет ещё используется. Завершите передачу, обработку или скачивание архива.');
-      if (!res.ok || !res.headers.get('content-type')?.includes('application/json')) throw new Error('Удаление не подтверждено. Обновите страницу.');
-      const result = await res.json();
+      const result = await post(deletion.action, {headers:{'X-CSRF-Token':csrf}});
       labels?.forget(deletion.dataset.deleteBatch);
       location.assign(result.url);
     } catch (error) {
@@ -64,11 +65,22 @@
     }
   });
 
+  field.addEventListener('change', () => {
+    errorBox.textContent = '';
+    field.removeAttribute('aria-invalid');
+    status.textContent = '';
+  });
   form.addEventListener('submit', async event => {
-    if (busy) { event.preventDefault(); return; }
-    if (starting && !field.files.length) return;
     event.preventDefault();
-    if (!field.files.length) return;
+    if (busy) return;
+    if (!field.files.length) {
+      errorBox.textContent = form.dataset.empty;
+      field.setAttribute('aria-invalid', 'true');
+      field.focus();
+      return;
+    }
+    errorBox.textContent = '';
+    field.removeAttribute('aria-invalid');
     const files = Array.from(field.files);
     busy = true;
     uploadVersion++;
@@ -78,7 +90,7 @@
     try {
       if (!address) {
         const body = new URLSearchParams({nonce: form.elements.nonce.value, csrf_token: csrf});
-        address = await post(form.action, {body, headers: {Accept: 'application/json'}});
+        address = await post(form.action, {body});
       }
       link.href = address.url;
       link.hidden = false;
@@ -104,10 +116,11 @@
         location.assign(address.url);
       } else {
         field.value = '';
-        status.textContent = 'Все выбранные файлы переданы.';
+        status.textContent = 'Загрузка завершена. Проверьте результат по каждому файлу в таблице.';
       }
     } catch (error) {
-      status.textContent = error.message;
+      status.textContent = '';
+      errorBox.textContent = error.message;
     } finally {
       button.disabled = false;
       field.disabled = false;

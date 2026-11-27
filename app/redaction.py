@@ -14,12 +14,20 @@ from .db import get_db
 from .personal_history import history_page
 from .privacy.engine import CATEGORIES, PrivacyError
 from .privacy.export import MIMES, export
-from .privacy.files import MAX_BYTES, SUPPORTED, extract_isolated
+from .privacy.files import MAX_BYTES, MAX_TEXT, SUPPORTED, extract_isolated
 from .privacy.names import NlpUnavailable
-from .privacy.processing import GROUPS, PROFILES, analyze
+from .privacy.processing import EMPTY_SOURCE, GROUPS, LONG_SOURCE, PROFILES, SettingsError, analyze
 
 bp = Blueprint("redaction", __name__, url_prefix="/redaction")
 redaction_batch.register(bp)
+
+INPUT_HINTS = {
+    "empty": EMPTY_SOURCE, "long": LONG_SOURCE,
+    "conflict": "Оставьте один источник. Для обработки файла очистите поле «Исходный текст». Для обработки текста снимите выбор файла.",
+    "format": "Этот формат не поддерживается. Сохраните документ в TXT, DOCX или PDF и выберите его снова.",
+    "empty_file": "Выбранный файл пуст. Выберите документ с текстом или сканом.",
+    "large_file": "Файл больше 12 МиБ. Загрузите его в разделе «Пакет файлов», где можно выбрать файл до 64 МиБ.",
+}
 
 
 @bp.after_request
@@ -73,11 +81,14 @@ def materials():
         ORDER BY created DESC,id DESC,kind LIMIT 51 OFFSET ?3""")
 
 
-def page(*, original="", record=None, error="", status=200, preview=False, ticket=""):
+def page(*, original="", record=None, error="", error_field="", status=200, preview=False, ticket=""):
     history = materials() if request.method == "GET" and record is None and not error else None
     return render_template("redaction/index.html", history=history, history_query=HISTORY_QUERY,
                            batch_limit=redaction_batch.BATCH_MAX_BYTES, record=record, original=original,
-                           error=error, profiles=PROFILES, formats=SUPPORTED, categories=CATEGORIES, groups=GROUPS, preview=preview, ticket=ticket, nonce=secrets.token_hex(16)), status
+                           error=error, error_field=error_field, empty_hint=redaction_batch.BATCH_EMPTY,
+                           batch_error=error if error_field=="batch" else "", hints=INPUT_HINTS, text_limit=MAX_TEXT,
+                           file_limit=MAX_BYTES, profiles=PROFILES, formats=SUPPORTED, categories=CATEGORIES,
+                           groups=GROUPS, preview=preview, ticket=ticket, nonce=secrets.token_hex(16)), status
 
 
 @bp.route("/", methods=["GET", "POST"])
@@ -87,7 +98,7 @@ def index():
     if request.method == "GET":
         return page()
     if request.content_length is None or request.content_length > MAX_BYTES + 300_000:
-        return page(error="Максимальный размер файла — 12 МиБ.", status=413)
+        return page(error=INPUT_HINTS["large_file"], error_field="file", status=413)
     owner = g.user["id"]
     db = get_db()
     nonce = request.form.get("nonce")
@@ -99,19 +110,25 @@ def index():
 
     if nonce and not request.form.get("preview") and (record := previous()):
         return redirect(url_for("redaction.show", record_id=record["record_id"]))
-    source = request.form.get("text", "")
+    source = request.form.get("text", "").replace("\r\n", "\n")
     upload = request.files.get("file")
     note = ""
     table_secrets = 0
+    field = "file" if upload and upload.filename else "text"
     try:
         if upload and upload.filename:
             if source.strip():
-                raise ValueError("Используйте один источник за раз — текстовое поле или файл.")
-            ext = upload.filename.rsplit(".", 1)[-1].lower()
+                field = "text"
+                raise ValueError(INPUT_HINTS["conflict"])
+            ext = upload.filename.rpartition(".")[2].lower() if "." in upload.filename else ""
             if ext not in SUPPORTED:
-                raise ValueError("Формат файла не поддерживается.")
+                raise ValueError(INPUT_HINTS["format"])
             with tempfile.NamedTemporaryFile(prefix="ismanager-upload-") as local:
                 upload.save(local)
+                if not local.tell():
+                    raise ValueError(INPUT_HINTS["empty_file"])
+                if local.tell() > MAX_BYTES:
+                    raise ValueError(INPUT_HINTS["large_file"])
                 local.flush()
                 source, note, table_secrets = extract_isolated(local.name, ext, batch=False, with_counts=True)
         profile = request.form.get("profile", "faceless")
@@ -119,11 +136,15 @@ def index():
         result = analyze(source, profile, request.form.get("glossary", ""), groups)
         result.field_secret_count += table_secrets
     except TimeoutError:
-        return page(error="Обработка превысила время ожидания. Разделите материал на части.", status=422)
-    except (PrivacyError, NlpUnavailable):
-        return page(error="Не удалось подтвердить обезличивание. Проверьте доступность моделей и формат текста.", status=422)
+        return page(error="Обработка превысила время ожидания. Разделите материал на части и обработайте их по очереди.", status=422)
+    except NlpUnavailable:
+        return page(error=redaction_batch.ERRORS["model"], status=422)
+    except PrivacyError:
+        return page(error=redaction_batch.ERRORS["verification"], status=422)
+    except SettingsError as exc:
+        return page(error=str(exc), error_field=exc.field, status=422)
     except ValueError as exc:
-        return page(error=str(exc), status=422)
+        return page(error=str(exc), error_field=field, status=422)
     record = {"profile": profile, "stats": result.stats(), "notes": ([note] if note else []) + result.warnings,
               "result": result.text}
     if request.form.get("preview"):

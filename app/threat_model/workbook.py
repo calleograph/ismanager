@@ -52,32 +52,45 @@ def workbook(data):
     return stream
 
 
+class WorkbookInputError(ValueError):
+    """A message for the person filling out the questionnaire."""
+
+
 def read_workbook(raw):
+    if not raw:
+        raise WorkbookInputError("В выбранном файле 0 байт. Сохраните заполненную анкету в формате XLSX и выберите её ещё раз.")
     if len(raw) > 2_000_000:
-        raise ValueError("Файл анкеты должен быть меньше 2 МБ.")
+        raise WorkbookInputError("Книга больше 2 МБ. Перенесите ответы в столбец B чистого шаблона и загрузите его.")
     labels = {label: key for key, label, _, _ in rows() if key}
     values = {}
     try:
         with ZipFile(BytesIO(raw)) as z:
             entries = z.infolist()
             if len(entries) > 250 or sum(e.file_size for e in entries) > 8_000_000:
-                raise ValueError("Превышен размер распакованной книги.")
+                raise WorkbookInputError("Книга слишком велика после распаковки. Перенесите ответы в чистый шаблон без дополнительных листов и изображений.")
         book = load_workbook(BytesIO(raw), read_only=True, keep_links=False)
         try:
             if "Анкета" not in book.sheetnames:
-                raise ValueError("В книге должен быть лист «Анкета».")
+                raise WorkbookInputError("В книге нет листа «Анкета». Скачайте пример шаблона и перенесите ответы в столбец B на этом листе.")
             sheet = book["Анкета"]
             sheet.reset_dimensions()
             for row, (a, b) in enumerate(sheet.iter_rows(max_col=2), 1):
                 if row > 350:
-                    raise ValueError("Слишком много строк в анкете.")
+                    raise WorkbookInputError("В анкете больше 350 строк. Перенесите ответы в строки исходного шаблона.")
                 key = labels.get(a.value)
                 if key:
-                    if key in values or b.data_type == "f":
-                        raise ValueError("В книге есть повторяющиеся поля или формулы.")
-                    values[key] = clean(key, str(b.value) if b.value is not None else "")
+                    if key in values:
+                        raise WorkbookInputError(f"В строке {row} повторяется поле «{a.value}». Оставьте одну строку для этого поля.")
+                    if b.data_type == "f":
+                        raise WorkbookInputError(f"В ячейке B{row} формула. Вставьте её результат как значение и загрузите книгу ещё раз.")
+                    try:
+                        values[key] = clean(key, str(b.value) if b.value is not None else "")
+                    except ValueError as exc:
+                        raise WorkbookInputError(f"Ячейка B{row}. {exc}") from exc
         finally:
             book.close()
+    except WorkbookInputError:
+        raise
     except (
         BadZipFile,
         InvalidFileException,
@@ -90,8 +103,9 @@ def read_workbook(raw):
         TypeError,
         IndexError,
         OverflowError,
+        ValueError,
     ) as error:
-        raise ValueError("Не удалось прочитать книгу XLSX. Используйте шаблон анкеты.") from error
+        raise WorkbookInputError("Не удалось прочитать книгу XLSX. Скачайте пример шаблона, заполните столбец B и загрузите сохранённый файл .xlsx.") from error
     if REQUIRED - values.keys():
-        raise ValueError("В книге нет обязательных строк шаблона.")
+        raise WorkbookInputError("В книге нет обязательных строк. Скачайте пример шаблона и перенесите ответы в столбец B, сохранив названия полей в столбце A.")
     return values

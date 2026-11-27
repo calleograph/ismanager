@@ -2,8 +2,9 @@
 <h1>{{ g.user.display_name }}</h1>
 {% if g.user.password %}<section class="panel"><h2>{{ 'Замените первичный пароль' if g.user.must_change else 'Сменить пароль' }}</h2>
 <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="password">
-<label>Текущий пароль<input type="password" name="current" autocomplete="current-password" required></label>
-<label>Новый пароль<input type="password" name="new" minlength="12" maxlength="1024" aria-describedby="new-pass-guide" autocomplete="new-password" required></label><p class="muted" id="new-pass-guide">От 12 знаков. Используйте не менее двух групп из четырёх — строчные буквы, заглавные, цифры и спецсимволы.</p><label>Повторите новый пароль<input type="password" name="repeat" autocomplete="new-password" required></label><button>Сохранить пароль</button></form></section>{% endif %}
+{% if password_error %}<p class="notice error" id="password-error" role="alert">{{ password_error }}</p>{% endif %}
+<label>Текущий пароль<input type="password" name="current" {% if error_field=="current" %}aria-invalid="true" autofocus aria-describedby="password-error"{% endif %} autocomplete="current-password" required></label>
+<label>Новый пароль<input type="password" name="new" {% if error_field=="new" %}aria-invalid="true" autofocus aria-describedby="password-error new-pass-guide"{% else %}aria-describedby="new-pass-guide"{% endif %} minlength="12" maxlength="1024" autocomplete="new-password" required></label><p class="muted" id="new-pass-guide">От 12 знаков. Используйте не менее двух групп из четырёх — строчные буквы, заглавные, цифры и спецсимволы.</p><label>Повторите новый пароль<input type="password" name="repeat" {% if error_field=="repeat" %}aria-invalid="true" autofocus aria-describedby="password-error"{% endif %} autocomplete="new-password" required></label><button>Сохранить пароль</button></form></section>{% endif %}
 {% if not g.user.must_change %}<section class="panel"><h2>Двухфакторная защита</h2><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 {% if required_totp %}<p>Для администраторов обязателен второй фактор.</p>{% endif %}
 {% if g.user.totp and required_totp %}<p>Аутентификатор подключён.</p>

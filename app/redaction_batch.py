@@ -26,18 +26,22 @@ PAGE_SIZE = 40
 CHUNK = 1024 * 1024
 STATES = {"queued":"В очереди", "running":"Обрабатывается", "done":"Готов", "failed":"Ошибка"}
 ERRORS = {
-    "extension":"Формат не поддерживается. Сохраните документ в одном из доступных форматов.",
+    "extension":"Формат не поддерживается. Сохраните документ в TXT, DOCX или PDF и добавьте его в пакет.",
     "size":f"Файл превышает предел {BATCH_MAX_BYTES//1048576} МиБ. Разделите его на части.",
-    "empty":"Файл пуст.",
+    "empty":"Файл пуст. Проверьте, что в документе есть текст или скан, сохраните его и добавьте снова.",
     "format":"Не удалось извлечь текст. Проверьте формат, целостность документа и качество скана.",
     "large_text":"Превышен предел обработки документа. Разделите его на части.",
+    "timeout":"Обработка заняла слишком много времени. Разделите документ на части и добавьте их по очереди.",
     "locked":"Снимите защиту документа или сохраните копию без шифрования.",
-    "verification":"Проверка обезличивания не пройдена. Результат закрыт.",
-    "model":"Не удалось загрузить локальные модели. Обратитесь к администратору.",
+    "verification":"После обезличивания проверка обнаружила чувствительные данные. Результат закрыт. Уберите такие данные в копии исходника и отправьте её повторно.",
+    "model":"Модель обезличивания недоступна. Попросите администратора проверить её установку и повторите обработку.",
     "interrupted":"Обработка была прервана. Добавьте файл повторно.",
     "missing":"Временный оригинал отсутствует. Добавьте файл повторно.",
     "internal":"Обработчик не завершил задачу. Добавьте файл повторно или обратитесь к администратору.",
 }
+
+BATCH_EMPTY = "Выберите хотя бы один файл в поле «Файлы для обезличивания», затем нажмите «Создать пакет»."
+ADD_EMPTY = "Выберите файл в поле «Файлы для обезличивания», затем нажмите «Добавить в пакет»."
 
 
 def mark_legacy_results(db, table):
@@ -170,7 +174,7 @@ def failure(error):
             return "large_text"
         return "format"
     if isinstance(error, PrivacyError):
-        return "verification"
+        return {"record_size": "large_text", "verification_timeout": "timeout"}.get(error.code, "verification")
     if isinstance(error, NlpUnavailable):
         return "model"
     if isinstance(error, FileNotFoundError):
@@ -223,7 +227,7 @@ def register(bp):
 
 
 def limit_request():
-    if request.endpoint == "redaction.upload_file":
+    if request.endpoint in {"redaction.create_batch", "redaction.upload_file"}:
         request.max_content_length = 8192 if request.is_json else BATCH_MAX_BYTES + 300_000
 
 
@@ -244,17 +248,21 @@ def create_batch():
     token = request.form.get("nonce","")
     if not re.fullmatch(r"[0-9a-f]{32}", token):
         abort(400)
+    reserve = request.accept_mimetypes.best == "application/json"
+    if not reserve and not request.files.get("file"):
+        from .redaction import page
+        return page(error=BATCH_EMPTY, error_field="batch", status=422)
     db = get_db()
     with db:
         db.execute("INSERT OR IGNORE INTO redaction_batches (owner,nonce) VALUES (?,?)", (g.user["id"],token))
         row = db.execute("SELECT id FROM redaction_batches WHERE owner=? AND nonce=?", (g.user["id"],token)).fetchone()
     link = url_for(".batch", batch_id=row["id"])
-    if request.accept_mimetypes.best == "application/json":
+    if reserve:
         return jsonify(id=row["id"],url=link,upload=url_for(".upload_file",batch_id=row["id"]))
-    return redirect(link, 303)
+    return upload_file(row["id"])
 
 
-def batch(batch_id):
+def batch(batch_id, *, error=""):
     info = owned_batch(batch_id)
     if request.method == "HEAD":
         return ""
@@ -272,7 +280,7 @@ def batch(batch_id):
     template = "redaction/batch_results.html" if request.headers.get("X-IS-Fragment") == "batch-results" else "redaction/batch.html"
     return render_template(template, batch=info, counts=counts, legacy=legacy, total=total, states=STATES,
                            errors=ERRORS, files=files, page=page, last_page=last_page, formats=SUPPORTED,
-                           limit=BATCH_MAX_BYTES, nonce=secrets.token_hex(16))
+                           batch_limit=BATCH_MAX_BYTES, empty_hint=ADD_EMPTY, batch_error=error, nonce=secrets.token_hex(16))
 
 
 def delete_batch(batch_id):
@@ -332,7 +340,7 @@ def receive_file(batch_id):
     if multipart:
         upload = request.files.get("file")
         if not upload or not upload.filename:
-            abort(400,description="Выберите файл.")
+            return batch(batch_id, error=ADD_EMPTY), 422
         filename = upload.filename.replace("\\","/").rsplit("/",1)[-1]
         ext = filename.rpartition(".")[2].lower() if "." in filename else ""
         stream, declared = upload.stream, None

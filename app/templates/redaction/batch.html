@@ -4,16 +4,11 @@
 {% block content %}
 <a href="{{ url_for('redaction.index') }}">← Обезличивание</a>
 <h1>Пакет № {{ batch.id }}</h1>
-<details class="panel batch-add"{% if not total %} open{% endif %}>
+<details class="panel batch-add"{% if not total or batch_error %} open{% endif %}>
   <summary>Добавить файлы</summary>
-  <p>До {{ limit//1048576 }} МиБ на файл. Оставьте вкладку открытой до окончания передачи.</p>
-  <form id="batch-upload" method="post" action="{{ url_for('redaction.upload_file',batch_id=batch.id) }}" enctype="multipart/form-data" data-batch-id="{{ batch.id }}" data-limit="{{ limit }}" data-formats="{{ formats|join(',') }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="nonce" value="{{ nonce }}">
-    <label>Файлы<input type="file" name="file" required accept=".{{ formats|join(',.') }}"></label>
-    <button>Добавить в пакет</button>
-  </form>
+  <p>Оставьте вкладку открытой до окончания передачи.</p>
+  {% include "redaction/batch_upload.html" %}
   <details><summary>Поддерживаемые форматы</summary><p>{{ formats|join(', ')|upper }}</p></details>
-  <p role="status" id="batch-upload-status"></p><a hidden id="batch-upload-link">Открыть пакет</a>
 </details>
 {% include "redaction/batch_results.html" %}
 {% endblock %}

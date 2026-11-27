@@ -33,14 +33,43 @@ def create(client):
     csrf = token(page)
     nonce = re.search(rb'id="batch-upload".*?name="nonce" value="([a-f0-9]+)"',page.data,re.S)[1].decode()
     data = dict(csrf_token=csrf,nonce=nonce)
-    where = client.post("/redaction/batches",data=data).location
-    assert client.post("/redaction/batches",data=data).location == where
+    headers = {"Accept": "application/json"}
+    where = client.post("/redaction/batches",data=data,headers=headers).json["url"]
+    assert client.post("/redaction/batches",data=data,headers=headers).json["url"] == where
     return where,csrf
 
 
 def upload(client, where, csrf, content, *, key=None, ext="txt"):
     return client.post(where+"/files?ext="+ext, data=content,content_type="application/octet-stream",
                        headers={"X-CSRF-Token":csrf,"X-Upload-Key":key or secrets.token_hex(16)})
+
+
+def test_native_batch_form_needs_a_file_and_accepts_the_first_document(setup):
+    app, client, _, _ = setup
+    csrf = token(client.get("/redaction/"))
+    fields = dict(nonce=secrets.token_hex(16), csrf_token=csrf)
+    missing = client.post("/redaction/batches", data={**fields, "file": (io.BytesIO(), "")})
+    assert missing.status_code == 422
+    body = missing.get_data(as_text=True)
+    assert jobs.BATCH_EMPTY in body and 'aria-invalid="true" autofocus' in body
+    assert "от 1 до 60 000" not in body
+    with app.app_context():
+        assert get_db().execute("SELECT count(*) FROM redaction_batches").fetchone()[0] == 0
+    for _ in range(2):
+        response = client.post("/redaction/batches", data={**fields, "file": (io.BytesIO(b"sample"), "sample.txt")})
+        assert response.status_code == 303
+    batch = response.location
+    missing = client.post(batch + "/files", data=fields)
+    assert missing.status_code == 422 and jobs.ADD_EMPTY in missing.get_data(as_text=True)
+    assert 'class="panel batch-add" open' in missing.get_data(as_text=True)
+    assert "Всего 1" in client.get(batch).get_data(as_text=True)
+
+
+@pytest.mark.parametrize(("code", "expected"), [("verification_timeout", "timeout"),
+                                                 ("record_size", "large_text"),
+                                                 ("verification_failed", "verification")])
+def test_batch_explains_the_processing_failure_without_disclosing_input(code, expected):
+    assert jobs.failure(jobs.PrivacyError(code, "sensitive document content")) == expected
 
 
 def test_batch_routes_results_errors_and_privacy(setup,monkeypatch,caplog):

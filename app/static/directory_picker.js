@@ -60,9 +60,10 @@
       const url = new URL(field.dataset.search, location.origin);
       url.searchParams.set('q', input.value.trim());
       const reply = await fetch(url, {signal: request.signal, headers: {Accept: 'application/json'}});
-      const data = await reply.json();
+      if (reply.redirected) throw new Error('Сеанс администратора завершён. Войдите в другой вкладке и повторите поиск.');
+      const data = await reply.json().catch(() => null);
       if (request.signal.aborted) return;
-      if (!reply.ok) throw new Error(data.error || 'Не удалось выполнить поиск.');
+      if (!reply.ok || !Array.isArray(data?.items)) throw new Error(data?.error || 'Каталог не ответил на поиск. Проверьте подключение к каталогу и повторите поиск по имени.');
       for (const item of data.items) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -73,9 +74,9 @@
         list.append(button);
       }
       list.hidden = !data.items.length;
-      message.textContent = data.items.length ? 'Выберите запись. Для уточнения введите часть имени.' : 'Совпадений нет.';
+      message.textContent = data.items.length ? 'Выберите запись. Для уточнения введите часть имени.' : 'Совпадений нет. Попробуйте ввести часть имени пользователя или группы.';
     } catch (error) {
-      if (!request.signal.aborted) message.textContent = error instanceof SyntaxError ? 'Обновите страницу и повторите вход.' : error.message;
+      if (!request.signal.aborted) message.textContent = error instanceof TypeError ? 'Нет связи с IS Manager. Проверьте подключение и повторите поиск.' : error.message;
     }
   }
 

@@ -170,7 +170,7 @@ def login():
     if not user or not user["admin"] or (user["totp"] and not (code.isascii() and code.isdigit() and accept_totp(user, code))):
         with db:
             audit("login.denied")
-        return render_template("login.html", error="Вход отклонён. Проверьте данные и код, если включена двухфакторная защита."), 401
+        return render_template("login.html", error="Не удалось войти. Проверьте имя пользователя и пароль. Если подключён аутентификатор, раскройте «Код двухфакторной защиты» и введите текущий код."), 401
     begin(user["id"], reservations)
     return after_signin(user["id"])
 
@@ -188,15 +188,22 @@ def account():
     user = g.user
     db = get_db()
     pending = session.get("enroll")
+    required_totp = user["admin"] and auth_settings()["admin_totp"]
     if request.method == "POST":
         action = request.form.get("action")
         if action == "password" and user["identity"] == "local:admin":
             new = request.form.get("new", "")
-            if (not check_password_hash(user["password"], request.form.get("current", "")) or
-                    not 12 <= len(new) <= 1024 or
-                    sum(any(test(c) for c in new) for test in (str.islower, str.isupper, str.isdigit, lambda c: not c.isalnum())) < 2 or
-                    new == request.form.get("current") or new != request.form.get("repeat")):
-                flash("Проверьте текущий пароль и повтор нового пароля длиной от 12 символов.", "error")
+            current = request.form.get("current", "")
+            if not 12 <= len(new) <= 1024:
+                field, message = "new", "Введите новый пароль длиной от 12 до 1024 знаков."
+            elif sum(any(test(c) for c in new) for test in (str.islower, str.isupper, str.isdigit, lambda c: not c.isalnum())) < 2:
+                field, message = "new", "Добавьте в новый пароль символы из второй группы, например цифру к строчным буквам."
+            elif new == current:
+                field, message = "new", "Придумайте новый пароль, который отличается от текущего."
+            elif new != request.form.get("repeat"):
+                field, message = "repeat", "Новый пароль и его повтор различаются. Введите один и тот же новый пароль в оба поля."
+            elif not check_password_hash(user["password"], current):
+                field, message = "current", "Введите действующий пароль в поле «Текущий пароль»."
             else:
                 with db:
                     db.execute("UPDATE users SET password=?,must_change=0 WHERE id=?", (generate_password_hash(new), user["id"]))
@@ -205,6 +212,8 @@ def account():
                 begin(user["id"])
                 flash("Пароль изменён.")
                 return after_signin(user["id"])
+            return render_template("account.html", pending=pending, required_totp=required_totp,
+                                   error_field=field, password_error=message), 422
         elif not user["must_change"]:
             code = request.form.get("code", "").strip()
             if action == "prepare" and not user["totp"]:
@@ -221,9 +230,9 @@ def account():
                     db.execute("UPDATE users SET totp=NULL,last_step=0 WHERE id=?", (user["id"],))
                     audit("totp.disabled", user["id"])
             else:
-                flash("Код не принят.", "error")
+                flash("Код не принят. Откройте аутентификатор, дождитесь нового шестизначного кода для IS Manager и введите его.", "error")
         return redirect(url_for("auth.account"))
-    return render_template("account.html", pending=pending, required_totp=user["admin"] and auth_settings()["admin_totp"])
+    return render_template("account.html", pending=pending, required_totp=required_totp)
 
 
 @click.command("admin-password")

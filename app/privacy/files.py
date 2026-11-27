@@ -72,7 +72,9 @@ class Projection:
     def append(self, value):
         self.size += len(value) + bool(self.lines)
         if self.size > self.limit:
-            raise FileError(f"Извлечённый текст превышает предел {self.limit:,} знаков.".replace(",", " "))
+            limit = f"{self.limit:,}".replace(",", " ")
+            action = "Добавьте файл в раздел «Пакет файлов»." if self.limit == MAX_TEXT else "Разделите документ на части и добавьте их по очереди."
+            raise FileError(f"Извлечённый текст превышает предел {limit} знаков. {action}")
         self.lines.append(value)
 
     def finish(self):
@@ -606,9 +608,9 @@ def run_tool(args, timeout=45):
             env={**os.environ, "LC_ALL": "C", "OMP_THREAD_LIMIT": "1"},
         )
     except FileNotFoundError:
-        raise FileError("В образе отсутствует программа чтения этого формата.") from None
+        raise FileError("На сервере отсутствует программа для чтения этого формата. Обратитесь к администратору.") from None
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        raise FileError("Документ повреждён, защищён или превысил время обработки.") from None
+        raise FileError("Не удалось прочитать документ. Откройте его на своём устройстве, сохраните новую копию и загрузите её снова.") from None
     return result.stdout
 
 

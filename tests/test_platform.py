@@ -54,6 +54,39 @@ def test_login_rate_limit(app):
     assert response.status_code == 429
 
 
+def test_form_errors_for_browser_and_json(app):
+    client = app.test_client()
+    client.get("/passwords/")
+    headers = {"Accept": "application/json"}
+    expired = client.post("/passwords/generate", headers=headers)
+    assert expired.status_code == 400 and "Форма устарела" in expired.json["error"]
+    oversized = client.post("/passwords/generate", data={"phrase": "a" * 13000}, headers=headers)
+    assert oversized.status_code == 413 and "пяти слов" in oversized.json["error"]
+    html = client.post("/passwords/generate", headers={"Accept": "*/*"})
+    assert html.status_code == 400 and "К генератору паролей" in html.get_data(as_text=True)
+    method = client.get("/passwords/generate", headers=headers)
+    assert method.status_code == 405 and "POST" in method.headers["Allow"]
+
+
+def test_password_change_shows_which_field_to_correct(app):
+    client, password = first_login(app)
+    proposed = secrets.token_urlsafe(20) + "a1"
+    for current, new, repeat, field, hint in [
+        (password, "short", "short", "new", "от 12 до 1024"),
+        (password, "a" * 16, "a" * 16, "new", "второй группы"),
+        (password, password, password, "new", "отличается"),
+        (password, proposed, "different", "repeat", "различаются"),
+        ("wrong", proposed, proposed, "current", "действующий пароль"),
+    ]:
+        response = client.post("/account", data=dict(action="password", current=current, new=new,
+                               repeat=repeat, csrf_token=token(client.get("/account"))))
+        html = response.get_data(as_text=True)
+        assert response.status_code == 422 and hint in html
+        assert f'name="{field}" aria-invalid="true"' in html
+        assert password not in html and proposed not in html
+    assert client.get("/admin/").status_code == 200
+
+
 def test_admin_recording_queue_and_worker_heartbeat(app, tmp_path):
     from app.worker import status
 

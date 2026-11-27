@@ -83,9 +83,9 @@ class ThreatCalculations(unittest.TestCase):
         b.active["B3"] = "=1+1"
         malformed = io.BytesIO()
         b.save(malformed)
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "B3.*формула"):
             read_workbook(malformed.getvalue())
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "столбец B"):
             read_workbook(b"not an xlsx")
 
 
@@ -122,6 +122,19 @@ class ThreatWorkflow(unittest.TestCase):
 
     def test_first_step_import_revision_and_owner(self):
         self.assertIn("Профиль системы", self.client.get("/threats/").text)
+        for upload, guidance in (
+            ({}, "выберите анкету XLSX"),
+            ({"sheet": (io.BytesIO(b""), "empty.xlsx")}, "0 байт"),
+            ({"sheet": (io.BytesIO(b"other"), "report.xls")}, "Скачайте пример шаблона"),
+        ):
+            invalid = self.client.post("/threats/new", data={
+                "action": "import", "objectType": "ispdn", "systemType": "crm", **upload,
+            })
+            self.assertEqual(invalid.status_code, 422)
+            self.assertIn('aria-describedby="sheet-error" autofocus', invalid.text)
+            self.assertIn('id="sheet-error"', invalid.text)
+            self.assertIn(guidance, invalid.text)
+            self.assertRegex(invalid.text, r'value="crm"\s+selected')
         response = self.client.post("/threats/new", data={"action": "next", "objectType": "ispdn"})
         self.assertEqual(response.status_code, 422)
         response = self.client.post("/threats/new", data={

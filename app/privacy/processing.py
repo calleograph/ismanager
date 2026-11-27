@@ -12,6 +12,9 @@ from .secrets import mask_explicit_fields
 
 PROFILES = {"faceless": "Полный · Faceless (максимальная строгость)", "strict": "Строгий · Переговорка", "basic": "Базовый · Переговорка"}
 
+EMPTY_SOURCE = "Вставьте текст в поле «Исходный текст» или выберите один файл для обработки."
+LONG_SOURCE = f"В тексте больше {MAX_TEXT:,} знаков. Разделите его на части или сохраните в TXT и загрузите в разделе «Пакет файлов».".replace(",", " ")
+
 GROUPS = {
     "personal": ("Люди, контакты и документы", ("person", "location", "address", "phone", "email", "id_number", "health", "bank")),
     "business": ("Организации и коммерческие сведения", ("organization", "doc_number", "money", "marker", "project")),
@@ -19,17 +22,23 @@ GROUPS = {
 }
 
 
+class SettingsError(ValueError):
+    def __init__(self, field, message):
+        super().__init__(message)
+        self.field = field
+
+
 def policy_for(profile, glossary="", groups=None):
     if profile not in PROFILES:
-        raise ValueError("Выберите профиль обработки.")
+        raise SettingsError("profile", "Выберите профиль в разделе «Настройки обработки» и повторите обработку.")
     words = [s.strip() for s in glossary.splitlines() if s.strip()]
     if len(words) > 48 or any(len(w) > 96 or w.startswith("re:") for w in words):
-        raise ValueError("Допустимо до 48 буквальных терминов длиной до 96 знаков.")
+        raise SettingsError("glossary", "В списке дополнительных слов оставьте до 48 строк по 96 знаков. Вводите слова без префикса re: и регулярных выражений.")
     policy = Policy.from_profile("strict" if profile == "faceless" else profile,
                                  use_faceless=profile == "faceless", terms=[Term(w) for w in words])
     if groups is not None:
         if set(groups) - GROUPS.keys():
-            raise ValueError("Неизвестная группа данных.")
+            raise SettingsError("groups", "Выберите категории из списка в разделе «Настройки обработки» и повторите обработку.")
         for key, (_, categories) in GROUPS.items():
             if key not in groups:
                 policy.actions.update(dict.fromkeys(categories, "keep"))
@@ -62,8 +71,10 @@ def verified(engine, source):
 
 
 def analyze(source, profile="faceless", glossary="", groups=None):
-    if not source.strip() or len(source) > MAX_TEXT:
-        raise ValueError("Требуется от 1 до 60 000 знаков исходного текста.")
+    if not source.strip():
+        raise ValueError(EMPTY_SOURCE)
+    if len(source) > MAX_TEXT:
+        raise ValueError(LONG_SOURCE)
     policy = policy_for(profile, glossary, groups)
     source, n = mask_explicit_fields(source)
     result = verified(Anonymizer(policy), source)

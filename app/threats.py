@@ -81,7 +81,7 @@ def index():
 def import_sheet(data):
     uploaded = request.files.get("sheet")
     if not uploaded or not uploaded.filename:
-        raise ValueError("Выберите заполненную анкету в формате Excel (.xlsx).")
+        raise ValueError("Нажмите «Загрузить заполненный файл» и выберите анкету XLSX. Если анкеты ещё нет, скачайте пример шаблона и заполните столбец B.")
     data.update(read_workbook(uploaded.stream.read(2_000_001)))
 
 
@@ -89,16 +89,18 @@ def import_sheet(data):
 def new():
     data = dict(DEFAULT)
     stage = 1
+    error_field = None
     try:
         if "objectType" in request.form:
             update_step(1, data)
         if request.form.get("action") == "import" or request.files.get("sheet"):
+            error_field = "sheet"
             import_sheet(data)
         elif request.form.get("action") == "next":
             check_step(data, 1)
             stage = 2
     except ValueError as exc:
-        return wizard(None, data, 1, str(exc))
+        return wizard(None, data, 1, str(exc), error_field)
     db = get_db()
     cursor = db.execute(
         "INSERT INTO threat_models(owner,name,data,stage) VALUES(?,?,?,?)",
@@ -130,17 +132,17 @@ def export(model_id):
 def read_image(upload):
     raw = upload.stream.read(2_000_001)
     if len(raw) > 2_000_000:
-        raise ValueError("Размер схемы превышает 2 МБ.")
+        raise ValueError("Схема больше 2 МБ. Уменьшите размер изображения и выберите файл ещё раз.")
     try:
         with Image.open(BytesIO(raw), formats=["JPEG", "PNG"]) as img:
             if img.width * img.height > 8_000_000:
-                raise ValueError("Схема превышает 8 мегапикселей.")
+                raise ValueError("Схема превышает 8 мегапикселей. Уменьшите разрешение изображения и загрузите его ещё раз.")
             img.thumbnail((1700, 1700))
             out = BytesIO()
             img.convert("RGB").save(out, format="JPEG", quality=86)
             return out.getvalue()
     except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as error:
-        raise ValueError("Выберите корректную схему PNG или JPEG.") from error
+        raise ValueError("Не удалось открыть схему. Сохраните изображение в формате PNG или JPEG и выберите его ещё раз.") from error
 
 
 def update_step(step, data):
@@ -192,6 +194,7 @@ def edit(model_id, step):
         return redirect(url_for(".edit", model_id=model_id, step=row["stage"]))
     data = json.loads(row["data"])
     error = None
+    error_field = None
     if request.method == "POST":
         if step == 11:
             abort(405)
@@ -201,6 +204,7 @@ def edit(model_id, step):
                 update_step(step, data)
             next_step = step
             if importing:
+                error_field = "sheet"
                 import_sheet(data)
             elif "jump" in request.form:
                 next_step = request.form.get("jump", type=int)
@@ -219,6 +223,7 @@ def edit(model_id, step):
             if step == 4:
                 upload = request.files.get("diagram")
                 if upload and upload.filename:
+                    error_field = "diagram"
                     args.append(read_image(upload))
                     columns += ",diagram=?"
                     changed_answers = True
@@ -237,15 +242,15 @@ def edit(model_id, step):
             return redirect(url_for(".edit", model_id=model_id, step=next_step))
         except ValueError as exc:
             error = str(exc)
-    return wizard(row, data, step, error)
+    return wizard(row, data, step, error, error_field)
 
 
-def wizard(row, data, step, error=None):
+def wizard(row, data, step, error=None, error_field=None):
     history = None if row else history_page("""SELECT id,name,stage,output IS NOT NULL AS ready
         FROM threat_models WHERE owner=? AND instr(casefold(name),?)>0
         ORDER BY updated DESC,id DESC LIMIT 51 OFFSET ?""")
     missing = []
-    if error and request.form.get("action") == "next":
+    if error and not error_field and request.form.get("action") == "next":
         missing = [key for key in BY_STEP[step] if key in REQUIRED and not data.get(key)]
     result = None
     try:
@@ -266,6 +271,7 @@ def wizard(row, data, step, error=None):
         step=step,
         catalog=CAT,
         error=error,
+        error_field=error_field,
         missing=missing,
         consequences=CONSEQUENCES,
         recommendations=profile(data),

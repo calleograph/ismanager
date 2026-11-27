@@ -77,6 +77,13 @@ def check_wizard(page, origin):
     with page.expect_download() as blank:
         page.get_by_role("link", name="Скачать пример шаблона").click()
     assert blank.value.suggested_filename.endswith(".xlsx")
+    page.locator("[name=systemType]").select_option("crm")
+    page.get_by_label("Загрузить заполненный файл").set_input_files(
+        dict(name="other.xls", mimeType="application/vnd.ms-excel", buffer=b"fixture"))
+    expect(page.locator("#sheet-error")).to_contain_text("Скачайте пример шаблона")
+    expect(page.locator("#threat-sheet")).to_be_focused()
+    expect(page.locator("[name=systemType]")).to_have_value("crm")
+    page.locator("[name=systemType]").select_option("")
     page.get_by_role("button", name="Далее").click()
     expect(page.get_by_role("alert")).to_contain_text("Заполните")
     expect(page.locator("[name=systemType]")).to_be_focused()

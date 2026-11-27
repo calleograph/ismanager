@@ -139,6 +139,21 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(self.post("/passwords/generate",mode="invalid").status_code,422)
         self.assertEqual(self.post("/redaction/",file=(io.BytesIO(b"invalid"),"test.xlsx")).status_code,422)
 
+    def test_redaction_distinguishes_missing_text_file_and_size_errors(self):
+        for fields, message in [
+            ({"text": " \n "}, "Вставьте текст в поле «Исходный текст»"),
+            ({"text": "я"*60001}, "В тексте больше 60 000 знаков"),
+            ({"file": (io.BytesIO(b"unknown"), "example.bin")}, "Этот формат не поддерживается"),
+            ({"file": (io.BytesIO(), "example.txt")}, "Выбранный файл пуст"),
+            ({"text": "text", "file": (io.BytesIO(b"x"), "x.txt")}, "Оставьте один источник"),
+        ]:
+            with self.subTest(message=message):
+                response = self.post("/redaction/", **fields)
+                self.assertEqual(response.status_code, 422)
+                body = response.get_data(as_text=True)
+                self.assertIn('id="redaction-error">'+message, body)
+                self.assertIn('aria-invalid="true" autofocus', body)
+
     def test_verified_preview_binds_owner_content_version_and_replays_once(self):
         from app.privacy.engine import Result
 

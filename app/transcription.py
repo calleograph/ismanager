@@ -8,6 +8,7 @@ from flask import (
     Blueprint, Response, abort, current_app, flash, g, redirect,
     render_template, request, url_for,
 )
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from .asr_store import init_db, model_status, source_path
 from .db import get_db
@@ -19,6 +20,11 @@ STATUS = {"queued": "В очереди", "running": "Идёт распознав
           "done": "Готово", "failed": "Ошибка"}
 MAX_UPLOAD = 512 * 1024 * 1024
 MAX_TEXT = 2_000_000
+UPLOAD_ERRORS = {
+    "missing": "В поле «Аудио или видео» выберите запись, затем нажмите «Расшифровать запись».",
+    "empty": "В выбранном файле 0 байт. Выберите копию записи со звуком.",
+    "large": "Запись больше 512 МиБ. Разделите её на части до 512 МиБ и загрузите каждую отдельно.",
+}
 
 
 @bp.before_app_request
@@ -39,14 +45,23 @@ def _job(job_id):
     return row
 
 
+def upload_page(error=None, status=200):
+    if error and request.accept_mimetypes.best == "application/json":
+        return {"error": error}, status
+    history = history_page("""SELECT id,filename,status,created FROM transcripts
+        WHERE owner=? AND instr(casefold(filename),?)>0 ORDER BY rowid DESC LIMIT 51 OFFSET ?""")
+    return render_template("transcription/index.html", history=history, status=STATUS,
+                           model_status=model_status(_data()), upload_errors=UPLOAD_ERRORS,
+                           upload_error=error), status
+
+
 @bp.route("/", methods=["GET", "POST"])
 def index():
     db = get_db()
     if request.method == "POST":
         media = request.files.get("media")
         if media is None or not media.filename or not media.filename.strip():
-            flash("Выберите аудио- или видеофайл.", "error")
-            return redirect(url_for(".index"))
+            return upload_page(UPLOAD_ERRORS["missing"], 422)
         name = media.filename.replace("\\", "/").split("/")[-1].strip()[:200]
         job_id = uuid4().hex
         dest = source_path(_data(), job_id)
@@ -57,15 +72,17 @@ def index():
                 while chunk := media.stream.read(1024 * 1024):
                     size += len(chunk)
                     if size > MAX_UPLOAD:
-                        abort(413)
+                        raise RequestEntityTooLarge()
                     out.write(chunk)
             if not size:
-                flash("Файл пуст. Выберите запись со звуком.", "error")
                 dest.unlink()
-                return redirect(url_for(".index"))
+                return upload_page(UPLOAD_ERRORS["empty"], 422)
             db.execute("INSERT INTO transcripts(id, owner, filename, accepted_at) VALUES (?,?,?,unixepoch())",
                        (job_id, g.user["id"], name or "Запись"))
             db.commit()
+        except RequestEntityTooLarge:
+            dest.unlink(missing_ok=True)
+            return upload_page(UPLOAD_ERRORS["large"], 413)
         except Exception:
             dest.unlink(missing_ok=True)
             raise
@@ -74,10 +91,7 @@ def index():
             return {"location": location}, 201
         return redirect(location)
 
-    history = history_page("""SELECT id,filename,status,created FROM transcripts
-        WHERE owner=? AND instr(casefold(filename),?)>0 ORDER BY rowid DESC LIMIT 51 OFFSET ?""")
-    return render_template("transcription/index.html", history=history, status=STATUS,
-                           model_status=model_status(_data()))
+    return upload_page()
 
 
 @bp.get("/<job_id>")
@@ -129,17 +143,25 @@ def retry(job_id):
 
 @bp.post("/<job_id>/save")
 def save(job_id):
-    _job(job_id)
-    body = request.form.get("body", "").strip()
+    job = _job(job_id)
+    if job["status"] != "done":
+        abort(409, "Дождитесь готовности стенограммы и снова откройте запись.")
+    submitted = request.form.get("body", "")
+    body = submitted.strip()
     if not body or len(body) > MAX_TEXT:
-        abort(400, "Введите текст длиной до 2 млн знаков.")
+        error = ("Введите текст стенограммы и нажмите «Сохранить правки»." if not body else
+                 "В стенограмме больше 2 млн знаков. Сократите текст и сохраните правки ещё раз.")
+        return render_template("transcription/detail.html", job=job, report=job_report(job),
+                               edited_body=submitted, edit_error=error), 422
     db = get_db()
     with db:
         changed = db.execute("UPDATE transcripts SET body=?,revision=revision+1 "
                              "WHERE id=? AND owner=? AND status='done' AND revision=?",
                              (body, job_id, g.user["id"], request.form.get("revision", type=int))).rowcount
     if not changed:
-        abort(409, "Стенограмма изменилась. Скопируйте свою правку и обновите страницу.")
+        current = _job(job_id)
+        return render_template("transcription/detail.html", job=current, report=job_report(current),
+                               conflict_body=submitted), 409
     flash("Правки сохранены.", "success")
     return redirect(url_for(".detail", job_id=job_id))
 

@@ -1,5 +1,19 @@
 """IS Manager application factory. The speech worker has its own dependencies."""
 
+HTTP_ERRORS = {
+    400: ("Проверьте форму", "Откройте форму ещё раз, проверьте заполненные поля и повторите отправку."),
+    401: ("Требуется вход", "Откройте страницу входа и войдите с учётной записью администратора."),
+    403: ("Доступ ограничен", "Для этого действия нужны права администратора. Обратитесь к администратору IS Manager."),
+    404: ("Страница не найдена", "Проверьте адрес. Сохранённые материалы можно открыть из истории в том браузере, где вы с ними работали."),
+    405: ("Действие недоступно", "Откройте нужный раздел и повторите действие из его формы."),
+    409: ("Состояние изменилось", "Откройте материал из истории, проверьте его текущее состояние и повторите действие."),
+    413: ("Слишком большой объём данных", "Уменьшите объём данных и повторите отправку."),
+    422: ("Не удалось обработать данные", "Проверьте поля формы и формат выбранного файла. Затем повторите отправку."),
+    429: ("Слишком много попыток", "Подождите несколько минут и повторите действие."),
+    500: ("Сбой на сервере", "Проверьте, появился ли результат в вашем разделе. Если сбой повторится, сообщите администратору время и действие."),
+    503: ("Сервис временно недоступен", "Подождите несколько минут и повторите попытку."),
+}
+
 
 def create_app(config=None):
     import fcntl
@@ -107,7 +121,7 @@ def create_app(config=None):
             if not session.get("csrf") or not hmac.compare_digest(
                 session["csrf"].encode(), supplied.encode()
             ):
-                abort(400, description="Форма устарела. Откройте страницу повторно.")
+                abort(400, description="Форма устарела. Обновите страницу и повторите отправку. Если вы прикрепляли файл, выберите его снова.")
         if public and g.user is None:
             g.user = auth.browser_workspace(create=request.method == "POST" and request.blueprint != "passwords")
 
@@ -143,8 +157,25 @@ def create_app(config=None):
 
     @app.errorhandler(HTTPException)
     def error(exc):
-        detail = exc.description if exc.description != type(exc).description else None
-        response = app.make_response((render_template("error.html", error=exc, detail=detail), exc.code))
+        title, hint = HTTP_ERRORS.get(exc.code, ("Не удалось выполнить запрос", "Откройте свой раздел и повторите действие."))
+        if exc.description != type(exc).description:
+            hint = exc.description
+        elif exc.code == 413:
+            hint = {
+                "redaction.index": "Выберите документ до 12 МиБ. Файлы до 64 МиБ каждый можно отправить через «Пакет файлов».",
+                "redaction.upload_file": "Разделите документ на файлы до 64 МиБ каждый и добавьте их в пакет.",
+                "redaction.create_batch": "Разделите документ на файлы до 64 МиБ каждый и добавьте их в пакет.",
+                "transcription.index": transcription.UPLOAD_ERRORS["large"],
+                "passwords.generate": "Сократите введённые параметры генерации. Для своей фразы используйте от трёх до пяти слов.",
+                "threats.new": "Уменьшите объём отправляемой анкеты. Для импорта выберите заполненный шаблон XLSX до 2 МБ.",
+                "threats.edit": "Уменьшите объём отправляемой анкеты. Для импорта выберите заполненный шаблон XLSX до 2 МБ.",
+            }.get(request.endpoint, hint)
+        response = exc.get_response()
+        if request.accept_mimetypes.best == "application/json":
+            response.set_data(app.json.dumps({"error": hint}))
+            response.mimetype = "application/json"
+        else:
+            response.set_data(render_template("error.html", error=exc, title=title, detail=hint))
         if exc.code == 503:
             response.headers["Retry-After"] = "8"
         return response

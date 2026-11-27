@@ -5,12 +5,16 @@
 <h1>Транскрибация</h1>
 <div class="panel">
   <h2>Новая запись</h2>
-  <form method="post" enctype="multipart/form-data" data-asr-upload>
+  <form method="post" enctype="multipart/form-data" data-asr-upload novalidate>
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>Аудио или видео
-      <input required type="file" id="media" name="media" accept="audio/*,video/*,.mkv,.m4a,.opus,.webm,.flac,.wma,.wmv,.amr,.3gp">
+      <input required type="file" id="media" name="media" accept="audio/*,video/*,.mkv,.m4a,.opus,.webm,.flac,.wma,.wmv,.amr,.3gp"
+             aria-describedby="media-help media-error" {% if upload_error %}aria-invalid="true" autofocus{% endif %}
+             {% for key, text in upload_errors.items() %}data-{{ key }}="{{ text }}" {% endfor %}>
     </label>
-    <p class="muted">До 512 МиБ и 6 часов. GigaAM распознаёт русскую речь локально.</p>
+    <p class="muted" id="media-help">До 512 МиБ и 6 часов. GigaAM распознаёт русскую речь локально.</p>
+    <p class="notice error" id="media-error" role="alert" {% if not upload_error %}hidden{% endif %}>{{ upload_error or '' }}</p>
+    <a data-check-uploads hidden href="{{ url_for('.index', _anchor='history') }}" target="_blank" rel="noopener">Проверить «Мои записи» в новой вкладке</a>
     <button type="submit">Расшифровать запись</button>
     <section class="asr-console" data-upload-console hidden aria-label="Передача записи">
       <strong role="status" data-upload-stage></strong>

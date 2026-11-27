@@ -1,0 +1,11 @@
+<form id="batch-upload" method="post" enctype="multipart/form-data" novalidate
+      {% if batch %}action="{{ url_for('.upload_file',batch_id=batch.id) }}" data-batch-id="{{ batch.id }}"
+      {% else %}action="{{ url_for('.create_batch') }}" data-create{% endif %}
+      data-limit="{{ batch_limit }}" data-formats="{{ formats|join(',') }}" data-empty="{{ empty_hint }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="nonce" value="{{ nonce }}">
+  <label>Файлы для обезличивания (до {{ batch_limit//1048576 }} МиБ каждый)<input type="file" name="file" required accept=".{{ formats|join(',.') }}" aria-describedby="batch-upload-error"{% if batch_error %} aria-invalid="true" autofocus{% endif %}></label>
+  <p class="notice error" id="batch-upload-error" role="alert">{{ batch_error }}</p>
+  <noscript><p>Выберите один файл. Остальные можно добавить в открытом пакете по очереди.</p></noscript>
+  <button type="submit">{{ "Добавить в пакет" if batch else "Создать пакет" }}</button>
+</form>
+<p role="status" id="batch-upload-status"></p><a hidden id="batch-upload-link">Открыть пакет</a>

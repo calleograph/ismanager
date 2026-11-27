@@ -96,9 +96,11 @@ if (panel) {
       const response = await fetch(form.action, {method:'POST', body:data, headers:{Accept:'application/json'}});
       if (response.redirected) throw new Error();
       const result = await response.json();
-      message.textContent = result.message;
+      const detail = result.message || result.error;
+      if (!detail) throw new Error();
+      message.textContent = detail;
       notice('');
-      if (!result.accepted) feedback = result.message;
+      if (!result.accepted) feedback = detail;
       if (result.accepted) {
         waiting = true;
         acceptedAt = Date.now();

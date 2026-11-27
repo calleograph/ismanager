@@ -23,7 +23,8 @@ def test_public_modules_keep_independent_owners(tmp_path):
     csrf = token(page)
     nonce = re.search(rb'name="nonce" value="([a-f0-9]+)"', page.data)[1].decode()
     assert alice.post("/redaction/batches", data={"nonce": nonce}).status_code == 400
-    batch = alice.post("/redaction/batches", data=dict(nonce=nonce, csrf_token=csrf)).location
+    batch = alice.post("/redaction/batches", data=dict(nonce=nonce, csrf_token=csrf,
+                                                        file=(io.BytesIO(b"example"), "example.txt"))).location
     job = alice.post("/transcription/", data=dict(media=(io.BytesIO(b"fixture"), "sample.ogg"), csrf_token=csrf)).location
     assert alice.get(batch).status_code == alice.get(job).status_code == 200
     batch_link = f'href="{batch}"'
@@ -54,7 +55,8 @@ def test_concurrent_first_submissions_share_one_guest_owner(tmp_path):
         client = app.test_client()
         with client.session_transaction() as state:
             state.update(initial)
-        return client.post("/redaction/batches", data=dict(nonce=secrets.token_hex(16), csrf_token=csrf)).status_code
+        return client.post("/redaction/batches", data=dict(nonce=secrets.token_hex(16), csrf_token=csrf,
+                                                            file=(io.BytesIO(b"test"), "test.txt"))).status_code
 
     with ThreadPoolExecutor(max_workers=4) as workers:
         assert list(workers.map(submit, range(4))) == [303] * 4

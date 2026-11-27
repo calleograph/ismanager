@@ -64,7 +64,13 @@ class RecordingTests(unittest.TestCase):
             self.assertTrue(worker.work(self.db, self.folder, None))
         save_data = {"revision": "0", "body": "Правка."}
         self.assertEqual(self.client.post(page + "/save", data=save_data).status_code, 302)
-        self.assertEqual(self.client.post(page + "/save", data=save_data).status_code, 409)
+        conflict = self.client.post(page + "/save", data={"revision": "0", "body": "Вариант из старой вкладки."})
+        self.assertEqual(conflict.status_code, 409)
+        self.assertIn("Вариант из старой вкладки.", conflict.text)
+        self.assertIn("Правка.</textarea>", conflict.text)
+        empty_edit = self.client.post(page + "/save", data={"revision": "1", "body": " "})
+        self.assertEqual(empty_edit.status_code, 422)
+        self.assertIn('aria-describedby="asr-edit-error"', empty_edit.text)
         self.assertEqual(self.client.get(page + "/export").get_data(as_text=True), "Правка.\n")
         self.assertIn("Исходный текст.", self.client.get(page).get_data(as_text=True))
         self.assertEqual(self.client.post(page + "/delete").status_code, 302)
@@ -83,12 +89,21 @@ class RecordingTests(unittest.TestCase):
         self.assertNotIn("другого пользователя", first + second)
         self.assertIn("не найдено", self.client.get("/transcription/?q=никаких").text)
 
-    def test_zero_byte_upload_and_size_limit(self):
-        self.upload(b"")
+    def test_missing_empty_and_oversize_upload_errors(self):
+        missing = self.client.post("/transcription/", data={})
+        self.assertEqual(missing.status_code, 422)
+        self.assertIn('aria-invalid="true" autofocus', missing.text)
+        self.assertIn("затем нажмите «Расшифровать запись»", missing.text)
+        headers = {"Accept": "application/json"}
+        self.assertEqual(self.client.post("/transcription/", headers=headers).json["error"], transcription.UPLOAD_ERRORS["missing"])
+        empty = self.client.post("/transcription/", data={"media": (io.BytesIO(b""), "empty.wav")}, headers=headers)
+        self.assertEqual(empty.status_code, 422)
+        self.assertEqual(empty.json["error"], transcription.UPLOAD_ERRORS["empty"])
         self.assertIsNone(self.db.execute("SELECT id FROM transcripts").fetchone())
         with patch.object(transcription, "MAX_UPLOAD", 5):
             response = self.client.post("/transcription/", data={"media": (io.BytesIO(b"oversize"), "f")})
         self.assertEqual(response.status_code, 413)
+        self.assertIn(transcription.UPLOAD_ERRORS["large"], response.text)
         self.assertFalse(list((self.folder / "media").iterdir()))
 
     def test_restart_reclaims_once_and_protects_active_recording(self):

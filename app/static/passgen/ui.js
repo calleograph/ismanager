@@ -110,10 +110,17 @@
   async function onServer(mode) {
     const formData = new FormData(form);
     if (mode !== 'custom') formData.delete('phrase');
-    const response = await fetch(form.action, {method:'POST', body:formData, credentials:'same-origin', cache:'no-store'});
-    if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Обновите страницу и повторите генерацию.');
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || 'Ошибка генерации.');
+    let response;
+    try {
+      response = await fetch(form.action, {method:'POST', body:formData, credentials:'same-origin',
+        cache:'no-store', headers:{Accept:'application/json'}});
+    } catch {
+      throw new Error('Нет связи с IS Manager. Проверьте подключение и нажмите кнопку генерации ещё раз.');
+    }
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !Array.isArray(payload?.results)) {
+      throw new Error(payload?.error || 'Сервер не вернул пароли. Повторите генерацию. Если ошибка повторится, сообщите администратору.');
+    }
     return payload.results;
   }
   async function copy(text, code) {

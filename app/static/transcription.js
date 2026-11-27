@@ -2,21 +2,40 @@
 
 const uploadForm = document.querySelector("[data-asr-upload]");
 if (uploadForm) {
+  const media = uploadForm.elements.media;
+  const error = document.getElementById("media-error");
+  const checkUploads = uploadForm.querySelector("[data-check-uploads]");
+  const panel = uploadForm.querySelector("[data-upload-console]");
+  media.addEventListener("change", () => {
+    error.hidden = true;
+    error.textContent = "";
+    checkUploads.hidden = true;
+    media.removeAttribute("aria-invalid");
+    panel.hidden = true;
+  });
   uploadForm.addEventListener("submit", event => {
     event.preventDefault();
-    const panel = uploadForm.querySelector("[data-upload-console]");
     const stage = panel.querySelector("[data-upload-stage]");
     const progress = panel.querySelector("progress");
     const count = panel.querySelector("[data-upload-count]");
     const button = uploadForm.querySelector("button[type=submit]");
-    const file = uploadForm.elements.media.files[0];
-    panel.hidden = false;
+    const file = media.files[0];
     progress.value = 0;
     count.textContent = "";
-    if (!file || file.size === 0 || file.size > 512 * 1024 ** 2) {
-      stage.textContent = "Выберите непустой файл размером до 512 МиБ.";
+    const issue = !file ? "missing" : file.size === 0 ? "empty" : file.size > 512 * 1024 ** 2 ? "large" : null;
+    if (issue) {
+      panel.hidden = true;
+      error.textContent = media.dataset[issue];
+      error.hidden = false;
+      media.setAttribute("aria-invalid", "true");
+      media.focus();
       return;
     }
+    error.hidden = true;
+    error.textContent = "";
+    checkUploads.hidden = true;
+    media.removeAttribute("aria-invalid");
+    panel.hidden = false;
     button.disabled = true;
     stage.textContent = "Отправка записи на сервер";
     const xhr = new XMLHttpRequest();
@@ -32,16 +51,27 @@ if (uploadForm) {
     };
     xhr.upload.onload = () => { stage.textContent = "Файл передан. Сервер принимает запись в очередь."; };
     const failed = () => {
-      stage.textContent = xhr.status === 413 ? "Файл превышает допустимый размер." :
-        "Передача не подтверждена. Проверьте раздел с вашими записями и соединение.";
+      panel.hidden = true;
+      if (typeof xhr.response?.error === "string") {
+        error.textContent = xhr.response.error;
+      } else if (xhr.status === 413) {
+        error.textContent = "Сервер отклонил файл по размеру. Выберите меньшую запись или уточните лимит у администратора.";
+      } else {
+        error.textContent = "Сервер не подтвердил загрузку. Проверьте соединение и откройте «Мои записи». Если записи там нет, отправьте её ещё раз.";
+        checkUploads.hidden = false;
+      }
+      error.hidden = false;
       button.disabled = false;
+      media.disabled = false;
     };
     xhr.onerror = xhr.onabort = failed;
     xhr.onload = () => {
       if (xhr.status === 201 && xhr.response?.location) location.assign(xhr.response.location);
       else failed();
     };
-    xhr.send(new FormData(uploadForm));
+    const body = new FormData(uploadForm);
+    media.disabled = true;
+    xhr.send(body);
   });
 }
 
@@ -54,6 +84,10 @@ if (panel) {
     if (!document.hidden) {
       try {
         const response = await fetch(panel.dataset.statusUrl, {headers: {"Accept": "application/json"}, cache: "no-store"});
+        if (response.status === 404) {
+          connection.textContent = "Запись больше недоступна в этом браузере. Откройте «Мои записи» и выберите доступную запись.";
+          return;
+        }
         if (!response.ok) throw new Error();
         const job = await response.json();
         if (job.state === "done" || job.state === "failed") {
