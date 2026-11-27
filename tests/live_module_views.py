@@ -104,8 +104,10 @@ def check_results(app, page, origin, batch, record):
         db.commit()
     resume_from_cache(page)
     expect(page.get_by_text("Ошибка 404")).to_be_visible()
-    page.goto(f"{origin}/redaction/batches/{batch}")
+    # Complete same-session requests before replacing the visitor's cookie jar.
+    page.goto(f"{origin}/redaction/batches/{batch}", wait_until="networkidle")
     page.context.clear_cookies()
+    assert not page.context.cookies(origin)
     resume_from_cache(page)
     expect(page.get_by_text("Ошибка 404")).to_be_visible()
 
