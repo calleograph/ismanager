@@ -145,7 +145,7 @@ class RouteTests(unittest.TestCase):
             ({"text": "я"*60001}, "В тексте больше 60 000 знаков"),
             ({"file": (io.BytesIO(b"unknown"), "example.bin")}, "Этот формат не поддерживается"),
             ({"file": (io.BytesIO(), "example.txt")}, "Выбранный файл пуст"),
-            ({"text": "text", "file": (io.BytesIO(b"x"), "x.txt")}, "Оставьте один источник"),
+            ({"text": "text", "file": (io.BytesIO(b"x"), "x.txt")}, "Чтобы обезличить файлы"),
         ]:
             with self.subTest(message=message):
                 response = self.post("/redaction/", **fields)
@@ -153,6 +153,46 @@ class RouteTests(unittest.TestCase):
                 body = response.get_data(as_text=True)
                 self.assertIn('id="redaction-error">'+message, body)
                 self.assertIn('aria-invalid="true" autofocus', body)
+
+    def test_unified_upload_routes_multiple_documents_to_one_owned_batch(self):
+        def files():
+            return [(io.BytesIO(b"first file"), "private-first.txt"),
+                    (io.BytesIO(b"second file"), "private-second.txt")]
+
+        for fields in ({}, {"file": files(), "text": "Typed content"}, {"file": files(), "preview": "1"}):
+            response = self.post("/redaction/", nonce=secrets.token_hex(16), **fields)
+            self.assertEqual(response.status_code, 422)
+            self.assertIn('id="redaction-error"', response.get_data(as_text=True))
+        with self.app.app_context():
+            self.assertEqual(get_db().execute("SELECT count(*) FROM redaction_batches").fetchone()[0], 0)
+
+        nonce = secrets.token_hex(16)
+        for _ in range(2):
+            result = self.post("/redaction/", file=files(), nonce=nonce)
+            self.assertRegex(result.location, r"^/redaction/batches/\d+$")
+        batch = self.client.get(result.location).get_data(as_text=True)
+        self.assertIn("Всего 2", batch)
+        self.assertNotIn("private-first", batch)
+        self.assertNotIn("private-second", batch)
+        with self.app.app_context():
+            db = get_db()
+            self.assertEqual(db.execute("SELECT count(*) FROM redaction_batches").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM redactions").fetchone()[0], 0)
+        self.login("two")
+        self.assertEqual(self.client.get(result.location).status_code, 404)
+
+    @unittest.skipUnless((names.NLP_DIR / names.NER_FILE).exists(), "Install NLP models as documented")
+    def test_single_document_accepts_more_text_than_the_paste_field(self):
+        payload = ("synthetic line\n" * 4500 + "Mailbox: redaction@example.org").encode()
+        response = self.post("/redaction/", file=(io.BytesIO(payload), "long.txt"))
+        self.assertEqual(response.status_code, 200)
+        with self.app.app_context():
+            db = get_db()
+            row = db.execute("SELECT result FROM redactions").fetchone()
+            self.assertIsNotNone(row)
+            self.assertGreater(len(row["result"]), 60000)
+            self.assertNotIn("redaction@example.org", row["result"])
+            self.assertEqual(db.execute("SELECT count(*) FROM redaction_batches").fetchone()[0], 0)
 
     def test_verified_preview_binds_owner_content_version_and_replays_once(self):
         from app.privacy.engine import Result

@@ -67,7 +67,10 @@ function markDirty(event) {
 }
 document.addEventListener("input", markDirty, true);
 document.addEventListener("change", markDirty, true);
+function markSaved(form) {
+  if (dirtyForms.delete(form) && !dirtyForms.size) window.removeEventListener("beforeunload", warnOnLeave);
+}
 document.addEventListener("submit", event => {
-  if (event.defaultPrevented || !dirtyForms.delete(event.target)) return;
-  if (!dirtyForms.size) window.removeEventListener("beforeunload", warnOnLeave);
+  if (!event.defaultPrevented) markSaved(event.target);
 });
+document.addEventListener("is-manager:saved", event => markSaved(event.target));

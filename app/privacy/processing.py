@@ -12,8 +12,8 @@ from .secrets import mask_explicit_fields
 
 PROFILES = {"faceless": "Полный · Faceless (максимальная строгость)", "strict": "Строгий · Переговорка", "basic": "Базовый · Переговорка"}
 
-EMPTY_SOURCE = "Вставьте текст в поле «Исходный текст» или выберите один файл для обработки."
-LONG_SOURCE = f"В тексте больше {MAX_TEXT:,} знаков. Разделите его на части или сохраните в TXT и загрузите в разделе «Пакет файлов».".replace(",", " ")
+EMPTY_SOURCE = "Вставьте текст в поле «Исходный текст» или выберите файлы для обезличивания."
+LONG_SOURCE = "В тексте больше 60 000 знаков. Разделите его на части или сохраните в TXT и выберите этот файл."
 
 GROUPS = {
     "personal": ("Люди, контакты и документы", ("person", "location", "address", "phone", "email", "id_number", "health", "bank")),
@@ -121,23 +121,20 @@ def sections(text, engine=None):
         yield text[start:]
 
 
-def redact_file(path, ext):
-    from .files import extract_isolated
-
-    text, note, table_secrets = extract_isolated(path, ext, with_counts=True)
+def analyze_document(text, policy, table_secrets=0, note="", timeout=1800):
     text, keys = _PRIVATE_KEY.subn(MASK, text)
     text, fields = mask_explicit_fields(text)
     counts = Counter()
     if keys or fields or table_secrets:
         counts["secret"] = keys + fields + table_secrets
     notes = [note] if note else []
-    engine = Anonymizer(policy_for("faceless"))
-    deadline = time.monotonic() + 1800
+    engine = Anonymizer(policy)
+    deadline = time.monotonic() + timeout
     parts = []
     known_secrets = set()
     for section in sections(text, engine):
         if time.monotonic() >= deadline:
-            raise PrivacyError("verification_timeout", "Обработка документа превысила полчаса. Разделите материал.")
+            raise PrivacyError("verification_timeout", "Обработка заняла слишком много времени. Разделите документ на части.")
         result = verified(engine, section)
         if parts and independent_check(parts[-1][-512:] + result.text[:512], engine.policy):
             raise PrivacyError("verification_failed", "Проверка на границе фрагментов обнаружила остаточные данные.")
@@ -157,3 +154,10 @@ def redact_file(path, ext):
                 raise PrivacyError("verification_failed", "Проверка полного документа обнаружила остаточные данные.")
             previous = part[-512:]
     return combined, dict(counts), notes
+
+
+def redact_file(path, ext):
+    from .files import extract_isolated
+
+    text, note, table_secrets = extract_isolated(path, ext, with_counts=True)
+    return analyze_document(text, policy_for("faceless"), table_secrets, note)

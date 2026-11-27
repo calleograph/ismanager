@@ -1,5 +1,6 @@
 """Check visible actions, background results and restored workspaces in a disposable browser."""
 import os
+import re
 import secrets
 import tempfile
 import threading
@@ -46,6 +47,63 @@ def resume_from_cache(page):
         if (!document.querySelector('.shell').inert) throw Error('Restored material was visible');
         dispatchEvent(new PageTransitionEvent('pageshow', {persisted:true}));
     }""")
+
+
+def check_redaction_upload(browser, origin):
+    for javascript in (True, False):
+        with browser.new_context(java_script_enabled=javascript) as context:
+            page = context.new_page()
+            page.goto(origin + "/redaction/")
+            form = page.locator("#redaction-form")
+            files = form.locator('input[type="file"][name="file"][multiple]')
+            expect(page.locator('input[type="file"]')).to_have_count(1)
+            submit = form.get_by_role("button", name="Обезличить и сохранить")
+            submit.click()
+            expect(form.locator("#redaction-error")).to_contain_text("Исходный текст")
+            expect(page.locator('main a[href*="/redaction/batches/"]')).to_have_count(0)
+            first = {"name": "first.txt", "mimeType": "text/plain", "buffer": b"first sample"}
+            second = {"name": "second.txt", "mimeType": "text/plain", "buffer": b"second sample"}
+            files.set_input_files(first)
+            form.get_by_role("button", name="Предпросмотр без сохранения").click()
+            expect(page.get_by_role("heading", name="Предпросмотр")).to_be_visible(timeout=15000)
+            expect(page.locator("#redacted-text")).to_have_value("first sample")
+            page.goto(origin + "/redaction/")
+            files.set_input_files(first)
+            submit.click()
+            expect(page.locator("#redacted-text")).to_have_value("first sample", timeout=15000)
+            page.goto(origin + "/redaction/")
+            files.set_input_files([first, second])
+            if javascript:
+                expect(form.get_by_role("button", name="Предпросмотр без сохранения")).to_be_hidden()
+                attempts = []
+
+                def fail_second_upload(route):
+                    attempts.append(route.request.post_data_buffer)
+                    if len(attempts) == 2:
+                        route.abort()
+                    else:
+                        route.continue_()
+
+                page.route(re.compile(r"/redaction/batches/\d+/files\?ext=txt$"), fail_second_upload)
+                submit.click()
+                expect(form.locator("#redaction-error")).to_contain_text("Проверьте соединение")
+                assert files.evaluate("field => field.files.length") == 2
+            submit.click()
+            expect(page.get_by_role("heading", name="Пакет №", level=1)).to_be_visible()
+            results = page.locator("#batch-results")
+            expect(results).to_contain_text("Всего 2")
+            if javascript:
+                expect(results.locator("[data-local-name]").first).to_contain_text("first.txt")
+                assert attempts == [first["buffer"], second["buffer"], second["buffer"]]
+            else:
+                expect(results).not_to_contain_text("first.txt")
+                page.get_by_text("Добавить файлы", exact=True).click()
+                page.locator('#batch-upload input[type="file"]').set_input_files([
+                    {"name": "third.txt", "mimeType": "text/plain", "buffer": b"third sample"},
+                    {"name": "fourth.txt", "mimeType": "text/plain", "buffer": b"fourth sample"},
+                ])
+                page.get_by_role("button", name="Добавить в пакет").click()
+                expect(results).to_contain_text("Всего 4")
 
 
 def check_results(app, page, origin, batch, record):
@@ -133,6 +191,7 @@ def run(directory):
         origin = f"http://127.0.0.1:{server.server_port}"
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(executable_path=os.getenv("CHROMIUM_PATH") or None)
+            check_redaction_upload(browser, origin)
             page = browser.new_page()
             first_screen(page, origin, PUBLIC_ACTIONS)
             page.get_by_label("Имя пользователя").fill("admin")
@@ -149,4 +208,4 @@ def run(directory):
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as directory:
         run(directory)
-    print("45 first-screen actions, stationary transcript and batch, restored draft and access checks passed.")
+    print("45 first-screen actions, single and batch upload with and without JavaScript, stationary results and access checks passed.")

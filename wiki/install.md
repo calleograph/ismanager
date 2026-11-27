@@ -9,26 +9,26 @@
 Скачайте установщик и выберите команду для своего размещения. В примерах для общего сервера замените имя и порты своими значениями.
 
 ```sh
-wget -O "$HOME/install-ismanager.sh" https://raw.githubusercontent.com/calleograph/ismanager/v0.6.1/install.sh
+wget -O "$HOME/install-ismanager.sh" https://raw.githubusercontent.com/calleograph/ismanager/v0.6.2/install.sh
 ```
 
 **Выделенный сервер, прямой HTTP в доверенной сети**
 
 ```sh
-sudo bash "$HOME/install-ismanager.sh" --ref v0.6.1 --access http
+sudo bash "$HOME/install-ismanager.sh" --ref v0.6.2 --access http
 ```
 
 **Общий сервер, свободный порт 18085**
 
 ```sh
-sudo bash "$HOME/install-ismanager.sh" --ref v0.6.1 \
+sudo bash "$HOME/install-ismanager.sh" --ref v0.6.2 \
   --shared-host --access http --port 18085
 ```
 
 **Nginx принимает HTTP на порту 8106, контейнер слушает порт 18086 на loopback**
 
 ```sh
-sudo bash "$HOME/install-ismanager.sh" --ref v0.6.1 \
+sudo bash "$HOME/install-ismanager.sh" --ref v0.6.2 \
   --shared-host --access proxy --bind 127.0.0.1 --port 18086 \
   --public-url http://ismanager.example.org:8106
 ```
@@ -36,12 +36,12 @@ sudo bash "$HOME/install-ismanager.sh" --ref v0.6.1 \
 **Nginx на том же сервере принимает HTTPS, для контейнера выделен порт 18086**
 
 ```sh
-sudo bash "$HOME/install-ismanager.sh" --ref v0.6.1 \
+sudo bash "$HOME/install-ismanager.sh" --ref v0.6.2 \
   --shared-host --access proxy --bind 127.0.0.1 --port 18086 \
   --public-url https://ismanager.example.org
 ```
 
-В режимах с прокси направьте запросы от выбранного имени Nginx на `http://127.0.0.1:18086`. Подставьте этот порт и свой домен в пример конфигурации. Для HTTPS укажите также действующий сертификат и ключ. Проверьте конфигурацию командой `sudo nginx -t` и примените её. Для отдельного прокси-сервера меняются привязка и адрес доверенного прокси, этот вариант разобран в руководстве. [Пример для HTTP](https://github.com/calleograph/ismanager/blob/v0.6.1/docs/nginx-http.conf.example) · [Пример для HTTPS](https://github.com/calleograph/ismanager/blob/v0.6.1/docs/nginx.conf.example) · [Варианты размещения](https://github.com/calleograph/ismanager/blob/v0.6.1/docs/ADMIN.md#сетевой-доступ)
+В режимах с прокси направьте запросы от выбранного имени Nginx на `http://127.0.0.1:18086`. Подставьте этот порт и свой домен в пример конфигурации. Для HTTPS укажите также действующий сертификат и ключ. Проверьте конфигурацию командой `sudo nginx -t` и примените её. Для отдельного прокси-сервера меняются привязка и адрес доверенного прокси, этот вариант разобран в руководстве. [Пример для HTTP](https://github.com/calleograph/ismanager/blob/v0.6.2/docs/nginx-http.conf.example) · [Пример для HTTPS](https://github.com/calleograph/ismanager/blob/v0.6.2/docs/nginx.conf.example) · [Варианты размещения](https://github.com/calleograph/ismanager/blob/v0.6.2/docs/ADMIN.md#сетевой-доступ)
 
 ## Что проверить с рабочего места
 

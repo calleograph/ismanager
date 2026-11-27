@@ -73,8 +73,7 @@ class Projection:
         self.size += len(value) + bool(self.lines)
         if self.size > self.limit:
             limit = f"{self.limit:,}".replace(",", " ")
-            action = "Добавьте файл в раздел «Пакет файлов»." if self.limit == MAX_TEXT else "Разделите документ на части и добавьте их по очереди."
-            raise FileError(f"Извлечённый текст превышает предел {limit} знаков. {action}")
+            raise FileError(f"Извлечённый текст превышает предел {limit} знаков. Разделите документ на части.")
         self.lines.append(value)
 
     def finish(self):
@@ -876,7 +875,7 @@ def _extract_with_count(ext, data, *, batch):
         raise FileError("Файл повреждён, защищён или не соответствует выбранному формату.") from None
 
 
-def extract_isolated(path, ext, *, batch=True, with_counts=False):
+def extract_isolated(path, ext, *, batch=True, with_counts=False, timeout=None):
     """Read a staged file. Optionally include the number of masks applied during table extraction."""
     if not isinstance(ext, str) or ext.lower().lstrip(".") not in SUPPORTED:
         raise FileError("Формат файла не поддерживается.")
@@ -905,7 +904,7 @@ def extract_isolated(path, ext, *, batch=True, with_counts=False):
             start_new_session=True,
         ) as proc:
             try:
-                output, _ = proc.communicate(timeout=900 if batch else 63)
+                output, _ = proc.communicate(timeout=timeout if timeout is not None else (900 if batch else 63))
             except subprocess.TimeoutExpired:
                 raise FileError("Файл превысил время обработки. Разделите материал на части.") from None
             finally:

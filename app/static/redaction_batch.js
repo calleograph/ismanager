@@ -1,16 +1,15 @@
 'use strict';
 (() => {
-  const form = document.getElementById('batch-upload');
+  const form = document.querySelector('#batch-upload, [data-batch-create]');
   if (!form) return;
   const field = form.querySelector('[type=file]');
   const csrf = form.elements.csrf_token.value;
   const prefix = form.elements.nonce.value.slice(0, 16);
   const ready = new WeakSet();
   const keys = new WeakMap();
-  field.multiple = true;
-  const starting = form.hasAttribute('data-create');
-  const status = document.getElementById('batch-upload-status');
-  const errorBox = document.getElementById('batch-upload-error');
+  const starting = Boolean(form.dataset.batchCreate);
+  const status = document.getElementById(starting ? 'redaction-status' : 'batch-upload-status');
+  const errorBox = document.getElementById(starting ? 'redaction-error' : 'batch-upload-error');
   const link = document.getElementById('batch-upload-link');
   const formats = new Set(form.dataset.formats.split(','));
   let counter = 0;
@@ -71,6 +70,7 @@
     status.textContent = '';
   });
   form.addEventListener('submit', async event => {
+    if (event.defaultPrevented || (starting && field.files.length < 2 && !busy)) return;
     event.preventDefault();
     if (busy) return;
     if (!field.files.length) {
@@ -87,13 +87,14 @@
     field.disabled = true;
     const button = form.querySelector('button');
     button.disabled = true;
+    if (starting) form.elements.text.readOnly = true;
     try {
       if (!address) {
         const body = new URLSearchParams({nonce: form.elements.nonce.value, csrf_token: csrf});
-        address = await post(form.action, {body});
+        address = await post(form.dataset.batchCreate, {body});
+        link.href = address.url;
+        link.hidden = false;
       }
-      link.href = address.url;
-      link.hidden = false;
       for (const [index, file] of files.entries()) {
         if (ready.has(file)) continue;
         status.textContent = 'Передача ' + (index + 1) + ' из ' + files.length + ' · ' + file.name;
@@ -113,6 +114,7 @@
         ready.add(file);
       }
       if (starting) {
+        form.dispatchEvent(new Event('is-manager:saved', {bubbles:true}));
         location.assign(address.url);
       } else {
         field.value = '';
@@ -124,6 +126,7 @@
     } finally {
       button.disabled = false;
       field.disabled = false;
+      if (starting) form.elements.text.readOnly = false;
       busy = false;
       if (!starting) refresh(true);
     }

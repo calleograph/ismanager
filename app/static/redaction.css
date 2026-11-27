@@ -1,7 +1,7 @@
 .redact-heading{display:flex;align-items:baseline;justify-content:space-between;gap:6px 20px;flex-wrap:wrap}
 .redact-heading nav{font-size:.9rem}
-.redact-workspace{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);align-items:start;gap:16px}
-.redact-workspace .panel{min-width:0;margin:0}
+.redact-inputs{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);align-items:start;gap:16px}
+.redact-inputs>div{min-width:0}
 .redact-workspace,.redact-result{margin-bottom:16px}
 .redact-workspace h2,.redact-result h2{margin-top:0}
 .redact-workspace p:empty,.redact-result p:empty,#batch-upload-status:empty,#batch-upload-error:empty{display:none}
@@ -17,7 +17,7 @@
 .redact-batch th:nth-child(2){width:26%}
 .redact-counts{display:flex;gap:4px 14px;flex-wrap:wrap;color:var(--muted)}
 .redact-counts strong{color:var(--text)}
-@media(max-width:760px){.redact-workspace{grid-template-columns:1fr}.redact-heading{margin-bottom:12px}.redact-heading nav{margin:0}.redact-result textarea{max-height:35vh}}
+@media(max-width:760px){.redact-inputs{grid-template-columns:1fr}.redact-heading{margin-bottom:12px}.redact-heading nav{margin:0}.redact-result textarea{max-height:35vh}}
 .redact-workspace input::file-selector-button,.redact-batch input::file-selector-button{font:inherit;font-weight:600;color:var(--accent);background:var(--tint);border:1px solid var(--line);border-radius:6px;margin-inline-end:8px;padding:4px 9px;cursor:pointer}
 
 .redact-materials{padding:0;list-style:none}

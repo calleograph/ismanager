@@ -17,17 +17,22 @@ redactionForm.addEventListener('submit', event => {
     return;
   }
   clearError();
+  const count = fileField.files.length;
   const file = fileField.files[0];
   const hasText = Boolean(sourceField.value.trim());
   let field = sourceField;
   let message;
   if (!hasText && !file) message = hints.empty;
   else if (hasText && file) message = hints.conflict;
+  else if (count > 1 && event.submitter?.name === 'preview') {
+    field = fileField;
+    message = hints.multiple_preview;
+  } else if (count > 1) return;
   else if (file) {
     field = fileField;
     if (!fileField.accept.split(',').includes(file.name.toLowerCase().match(/\.[^.]+$/)?.[0])) message = hints.format;
     else if (!file.size) message = hints.empty_file;
-    else if (file.size > Number(redactionForm.dataset.fileLimit)) message = hints.large_file;
+    else if (file.size > Number(redactionForm.dataset.limit)) message = hints.large_file;
   } else {
     const limit = Number(redactionForm.dataset.textLimit);
     if (sourceField.value.length > limit && Array.from(sourceField.value).length > limit) message = hints.long;
@@ -43,7 +48,15 @@ redactionForm.addEventListener('submit', event => {
   redactionStatus.textContent = 'Обработка материала и проверка результата…';
 });
 redactionForm.addEventListener('input', clearError);
+function showFileActions() {
+  const batch = fileField.files.length > 1;
+  redactionForm.elements.preview.hidden = batch;
+  redactionForm.querySelector('.redact-settings').hidden = batch;
+}
+fileField.addEventListener('change', showFileActions);
 window.addEventListener('pageshow', () => {
   redactionForm.removeAttribute('aria-busy');
   redactionStatus.textContent = '';
+  showFileActions();
 });
+showFileActions();

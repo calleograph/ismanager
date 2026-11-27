@@ -5,7 +5,6 @@
 {% block content %}
 <header class="pageheading redact-heading" data-check-url="{{ url_for('.show',record_id=record.id) if record and not preview else url_for('.index') }}"><h1>Обезличивание</h1><nav class="actions" aria-label="Инструменты обезличивания">
   {% if record %}<a href="#redaction-form">Новая обработка</a>{% endif %}
-  <a href="#batch-panel">Пакет файлов</a>
   {% if not history or history.rows or history.query or history.page>1 %}<a href="{{ url_for('.index',_anchor='history') if not history else '#history' }}">История</a>{% endif %}
 </nav></header>
 {% if record %}
@@ -16,7 +15,7 @@
   {% for note in record.notes %}<p>{{ note }}</p>{% endfor %}
   <label>Обработанный текст<textarea rows="8" id="redacted-text" readonly {% if preview %}form="save-preview" name="result"{% endif %}>{{ record.result }}</textarea></label>
   <div class="actions">
-    {% if preview %}<form id="save-preview" method="post" action="{{ url_for('.save_preview') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="ticket" value="{{ ticket }}"><button>Сохранить результат</button></form>
+    {% if preview %}<form id="save-preview" method="post" enctype="multipart/form-data" action="{{ url_for('.save_preview') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="ticket" value="{{ ticket }}"><button>Сохранить результат</button></form>
     {% else %}<form method="get" action="{{ url_for('.download',record_id=record.id) }}" class="actions">
       <select name="format" aria-label="Формат файла">{% for fmt in ['txt','docx','xlsx','odt','ods'] %}<option value="{{ fmt }}">{{ fmt.upper() }}</option>{% endfor %}</select><button>Скачать</button>
     </form>{% endif %}
@@ -28,12 +27,15 @@
   {% if not preview %}<form method="post" action="{{ url_for('.delete', record_id=record.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="secondary" type="submit" data-confirm="Удалить этот результат из истории?">Удалить результат</button></form>{% endif %}
 </section>
 {% endif %}
-<div class="redact-workspace">
-<form data-warn-unsaved method="post" enctype="multipart/form-data" class="panel" id="redaction-form" data-hints='{{ hints|tojson }}' data-file-limit="{{ file_limit }}" data-text-limit="{{ text_limit }}" action="{{ url_for('.index') }}">
-  <h2>Текст или один файл</h2>
+<form data-warn-unsaved method="post" enctype="multipart/form-data" class="panel redact-workspace" id="redaction-form" data-hints='{{ hints|tojson }}' data-text-limit="{{ text_limit }}" action="{{ url_for('.index') }}" data-batch-create="{{ url_for('.create_batch') }}" data-formats="{{ formats|join(',') }}" data-limit="{{ file_limit }}">
   <input type="hidden" name="nonce" value="{{ nonce }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="redact-inputs"><div>
   <label>Исходный текст<textarea name="text" aria-describedby="redaction-error"{% if error_field=="text" %} aria-invalid="true" autofocus{% endif %} rows="4" placeholder="Вставьте текст для обработки">{{ request.form.get('text','') if error else '' }}</textarea></label>
-  <label>Или файл до 12 МиБ<input type="file" name="file" aria-describedby="redaction-error"{% if error_field=="file" %} aria-invalid="true" autofocus{% endif %} accept=".{{ formats|join(',.') }}"></label>
+  </div><div>
+  <label>Файлы для обезличивания<input type="file" name="file" multiple aria-describedby="redaction-file-hint redaction-error"{% if error_field=="file" %} aria-invalid="true" autofocus{% endif %} accept=".{{ formats|join(',.') }}"></label>
+  <p class="muted" id="redaction-file-hint">Один файл — отдельный результат. Несколько — пакет с полным профилем Faceless. До {{ file_limit//1048576 }} МиБ на файл.</p>
+  <details><summary>Поддерживаемые форматы</summary><p>{{ formats|join(', ')|upper }}. Для сканов используется распознавание текста (OCR).</p></details>
+  </div></div>
   <details class="redact-settings"{% if error_field in ('groups','profile','glossary') or error and request.form.get('glossary') %} open{% endif %}><summary>Настройки обработки</summary>
     <label>Профиль<select name="profile"{% if error_field=="profile" %} aria-describedby="redaction-error" aria-invalid="true" autofocus{% endif %}>{% for value,title in profiles.items() %}<option value="{{ value }}"{% if error and request.form.get('profile')==value %} selected{% endif %}>{{ title }}</option>{% endfor %}</select></label>
     <fieldset><legend>Категории данных</legend><input type="hidden" name="groups_shown" value="1">
@@ -42,18 +44,11 @@
     <p>Пароли и ключи скрываются при любом выборе.</p>
     <label>Дополнительные слова для замены, по одному на строку<textarea name="glossary"{% if error_field=="glossary" %} aria-describedby="redaction-error" aria-invalid="true" autofocus{% endif %} rows="2" maxlength="4656">{{ request.form.get('glossary','') if error else '' }}</textarea></label>
   </details>
-  <p class="notice error" role="alert" id="redaction-error">{{ error if error_field != "batch" else "" }}</p>
-  <p role="status" id="redaction-status"></p>
-  <div class="actions"><button type="submit">Обезличить и сохранить</button><button class="secondary" type="submit" name="preview" value="1">Предпросмотр без сохранения</button></div>
+  <p class="notice error" role="alert" id="redaction-error">{{ error }}</p>
+  <p role="status" id="redaction-status"></p><a hidden id="batch-upload-link">Открыть пакет</a>
+  <div class="actions"><button type="submit">Обезличить и сохранить</button><button class="secondary" type="submit" name="preview" value="1">Предпросмотр без сохранения</button>
+  {% if g.user.admin %}<a href="{{ url_for('admin.watch_edit',kind='redaction') }}">Настроить правило для папок</a>{% endif %}</div>
 </form>
-<section class="panel" id="batch-panel">
-  <h2>Пакет файлов</h2>
-  <p>Обработка в фоне по полному профилю Faceless. Готовые тексты можно скачать по одному или архивом ZIP.</p>
-  {% include "redaction/batch_upload.html" %}
-  <details><summary>Поддерживаемые форматы</summary><p>{{ formats|join(', ')|upper }}. Для сканов используется локальное распознавание текста (OCR).</p></details>
-  {% if g.user.admin %}<p><a href="{{ url_for('admin.watch_edit',kind='redaction') }}">Настроить правило для папок</a></p>{% endif %}
-</section>
-</div>
 {% if history and (history.rows or history.query or history.page>1 or history.legacy) %}<section class="panel" id="history"><h2 id="redaction-history">История обработки</h2>
   {{ search(history, 'redaction.index', 'Номер или дата (ДД.ММ.ГГГГ или ГГГГ-ММ-ДД)', history_query) }}
   {% if history.rows %}<ul class="redact-materials">{% for row in history.rows %}<li>

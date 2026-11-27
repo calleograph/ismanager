@@ -19,11 +19,13 @@ from .db import get_db
 from .privacy.engine import PrivacyError
 from .privacy.files import BATCH_MAX_BYTES, FileError, SUPPORTED
 from .privacy.names import NlpUnavailable
-from .privacy.processing import redact_file
+from .privacy.processing import EMPTY_SOURCE, redact_file
 
 
 PAGE_SIZE = 40
 CHUNK = 1024 * 1024
+FORM_LIMIT = 2 * BATCH_MAX_BYTES + 300_000
+FORM_LIMIT_HINT = "Отправляйте файлы частями. Без JavaScript общий объём одной загрузки — до 128 МиБ."
 STATES = {"queued":"В очереди", "running":"Обрабатывается", "done":"Готов", "failed":"Ошибка"}
 ERRORS = {
     "extension":"Формат не поддерживается. Сохраните документ в TXT, DOCX или PDF и добавьте его в пакет.",
@@ -40,7 +42,6 @@ ERRORS = {
     "internal":"Обработчик не завершил задачу. Добавьте файл повторно или обратитесь к администратору.",
 }
 
-BATCH_EMPTY = "Выберите хотя бы один файл в поле «Файлы для обезличивания», затем нажмите «Создать пакет»."
 ADD_EMPTY = "Выберите файл в поле «Файлы для обезличивания», затем нажмите «Добавить в пакет»."
 
 
@@ -227,8 +228,15 @@ def register(bp):
 
 
 def limit_request():
-    if request.endpoint in {"redaction.create_batch", "redaction.upload_file"}:
-        request.max_content_length = 8192 if request.is_json else BATCH_MAX_BYTES + 300_000
+    if request.method != "POST":
+        return
+    if request.endpoint == "redaction.index":
+        request.max_content_length = FORM_LIMIT
+    elif request.endpoint in {"redaction.create_batch", "redaction.upload_file"}:
+        if request.mimetype == "multipart/form-data":
+            request.max_content_length = FORM_LIMIT
+        else:
+            request.max_content_length = 8192 if request.is_json else BATCH_MAX_BYTES + 300_000
 
 
 def history(db, owner, before=None):
@@ -245,21 +253,43 @@ def owned_batch(batch_id):
 
 
 def create_batch():
-    token = request.form.get("nonce","")
+    if request.accept_mimetypes.best != "application/json":
+        files = selected_files()
+        if files:
+            return add_selected_files(reserve_batch(), files)
+        from .redaction import page
+        return page(error=EMPTY_SOURCE, error_field="file", status=422)
+    batch_id = reserve_batch()
+    return jsonify(id=batch_id, url=url_for(".batch", batch_id=batch_id), upload=url_for(".upload_file", batch_id=batch_id))
+
+
+def selected_files():
+    return [item for item in request.files.getlist("file") if item.filename]
+
+
+def reserve_batch():
+    token = request.form.get("nonce", "")
     if not re.fullmatch(r"[0-9a-f]{32}", token):
         abort(400)
-    reserve = request.accept_mimetypes.best == "application/json"
-    if not reserve and not request.files.get("file"):
-        from .redaction import page
-        return page(error=BATCH_EMPTY, error_field="batch", status=422)
     db = get_db()
     with db:
         db.execute("INSERT OR IGNORE INTO redaction_batches (owner,nonce) VALUES (?,?)", (g.user["id"],token))
         row = db.execute("SELECT id FROM redaction_batches WHERE owner=? AND nonce=?", (g.user["id"],token)).fetchone()
-    link = url_for(".batch", batch_id=row["id"])
-    if reserve:
-        return jsonify(id=row["id"],url=link,upload=url_for(".upload_file",batch_id=row["id"]))
-    return upload_file(row["id"])
+    return row["id"]
+
+
+def add_selected_files(batch_id, files):
+    nonce = request.form.get("nonce", "")
+    if not re.fullmatch(r"[0-9a-f]{32}", nonce):
+        abort(400)
+    lock, _ = batch_lock(batch_id)
+    with lock:
+        for index, upload in enumerate(files):
+            key = nonce if index == 0 else hashlib.sha256(f"{nonce}:{index}".encode()).hexdigest()[:32]
+            filename = upload.filename.replace("\\", "/").rsplit("/", 1)[-1]
+            ext = filename.rpartition(".")[2].lower() if "." in filename else ""
+            store_file(batch_id, key, ext, upload.stream, filename=filename)
+    return redirect(url_for(".batch", batch_id=batch_id), 303)
 
 
 def batch(batch_id, *, error=""):
@@ -324,34 +354,32 @@ def record(db, batch_id, key, ext, fingerprint, source, error):
 
 
 def upload_file(batch_id):
+    if request.mimetype == "multipart/form-data":
+        files = selected_files()
+        if not files:
+            return batch(batch_id, error=ADD_EMPTY), 422
+        return add_selected_files(batch_id, files)
     lock, _ = batch_lock(batch_id)
     with lock:
         return receive_file(batch_id)
 
 
 def receive_file(batch_id):
-    db = get_db()
-    key = request.headers.get("X-Upload-Key") or request.form.get("nonce","")
+    key = request.headers.get("X-Upload-Key", "")
     if not re.fullmatch(r"[0-9a-f]{32}",key):
         abort(400)
-    raw = request.mimetype == "application/octet-stream"
-    metadata = request.get_json() if request.is_json else None
-    multipart = not raw and metadata is None
-    if multipart:
-        upload = request.files.get("file")
-        if not upload or not upload.filename:
-            return batch(batch_id, error=ADD_EMPTY), 422
-        filename = upload.filename.replace("\\","/").rsplit("/",1)[-1]
-        ext = filename.rpartition(".")[2].lower() if "." in filename else ""
-        stream, declared = upload.stream, None
-    elif raw:
-        ext = request.args.get("ext","").lower()
-        stream, declared = request.stream, request.content_length
+    if request.mimetype == "application/octet-stream":
+        ordinal, error = store_file(batch_id, key, request.args.get("ext", "").lower(), request.stream, request.content_length)
     else:
-        if not isinstance(metadata,dict) or not isinstance(metadata.get("size"),int) or not isinstance(metadata.get("ext"),str):
+        metadata = request.get_json() if request.is_json else None
+        if not isinstance(metadata, dict) or not isinstance(metadata.get("size"), int) or not isinstance(metadata.get("ext"), str):
             abort(400)
-        ext, declared = metadata["ext"].lower(), metadata["size"]
-        stream = None
+        ordinal, error = store_file(batch_id, key, metadata["ext"].lower(), None, metadata["size"], hint=str(metadata.get("hint", ""))[:32])
+    return jsonify(ordinal=ordinal, error=ERRORS.get(error, ""))
+
+
+def store_file(batch_id, key, ext, stream, declared=None, *, filename=None, hint=""):
+    db = get_db()
     error = "extension" if ext not in SUPPORTED else "size" if declared and declared>BATCH_MAX_BYTES else ""
     ext = ext if ext in SUPPORTED else ""
     secret = current_app.secret_key
@@ -386,17 +414,16 @@ def receive_file(batch_id):
                     os.close(directory_fd)
             if error:
                 # Invalid submissions have no retained content. Hash only metadata supplied for retries.
-                hint = filename[:512] if multipart else str((metadata or {}).get("hint",""))[:32]
-                if not multipart and not re.fullmatch(r"[0-9a-f]{16}",hint):
+                if filename is not None:
+                    hint = filename[:512]
+                elif not re.fullmatch(r"[0-9a-f]{16}",hint):
                     hint = key if error != "empty" else ""
                 mac.update(json.dumps([error,hint,declared,ext],ensure_ascii=False).encode())
             ordinal, keep = record(db,batch_id,key,ext,mac.hexdigest(),None if error else token,error)
         finally:
             if created and not keep:
                 path.unlink(missing_ok=True)
-    if multipart:
-        return redirect(url_for(".batch", batch_id=batch_id),303)
-    return jsonify(ordinal=ordinal, error=ERRORS.get(error,""))
+    return ordinal, error
 
 
 def batch_download(batch_id, ordinal):

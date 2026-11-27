@@ -27,7 +27,7 @@ def create_app(config=None):
     from flask import Flask, abort, g, redirect, render_template, request, session, url_for
     from werkzeug.exceptions import HTTPException
 
-    from . import admin, auth, db, network, passwords, redaction, threats, transcription
+    from . import admin, auth, db, network, passwords, redaction, redaction_batch, threats, transcription
 
     app = Flask(__name__)
     app.config.from_mapping(
@@ -89,9 +89,10 @@ def create_app(config=None):
 
     @app.before_request
     def authorize():
-        limits = {"redaction.index": 12 * 1024**2 + 300000, "passwords.generate": 12000}
-        if request.endpoint in limits:
-            request.max_content_length = limits[request.endpoint]
+        if request.endpoint == "passwords.generate":
+            request.max_content_length = 12000
+        elif request.endpoint == "redaction.save_preview":
+            request.max_form_memory_size = 9 * 1024**2
         g.user = None
         if request.endpoint in {"static", "health"}:
             return
@@ -162,9 +163,10 @@ def create_app(config=None):
             hint = exc.description
         elif exc.code == 413:
             hint = {
-                "redaction.index": "Выберите документ до 12 МиБ. Файлы до 64 МиБ каждый можно отправить через «Пакет файлов».",
-                "redaction.upload_file": "Разделите документ на файлы до 64 МиБ каждый и добавьте их в пакет.",
-                "redaction.create_batch": "Разделите документ на файлы до 64 МиБ каждый и добавьте их в пакет.",
+                "redaction.index": redaction_batch.FORM_LIMIT_HINT,
+                "redaction.upload_file": (redaction_batch.FORM_LIMIT_HINT if request.mimetype == "multipart/form-data"
+                                          else "Разделите документ на файлы до 64 МиБ каждый и добавьте их в пакет."),
+                "redaction.create_batch": redaction_batch.FORM_LIMIT_HINT,
                 "transcription.index": transcription.UPLOAD_ERRORS["large"],
                 "passwords.generate": "Сократите введённые параметры генерации. Для своей фразы используйте от трёх до пяти слов.",
                 "threats.new": "Уменьшите объём отправляемой анкеты. Для импорта выберите заполненный шаблон XLSX до 2 МБ.",

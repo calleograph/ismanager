@@ -14,21 +14,21 @@ from .db import get_db
 from .personal_history import history_page
 from .privacy.engine import CATEGORIES, PrivacyError
 from .privacy.export import MIMES, export
-from .privacy.files import MAX_BYTES, MAX_TEXT, SUPPORTED, extract_isolated
+from .privacy.files import BATCH_MAX_BYTES, MAX_TEXT, SUPPORTED, extract_isolated
 from .privacy.names import NlpUnavailable
-from .privacy.processing import EMPTY_SOURCE, GROUPS, LONG_SOURCE, PROFILES, SettingsError, analyze
+from .privacy.processing import EMPTY_SOURCE, GROUPS, LONG_SOURCE, PROFILES, SettingsError, analyze, analyze_document, policy_for
 
 bp = Blueprint("redaction", __name__, url_prefix="/redaction")
 redaction_batch.register(bp)
 
 INPUT_HINTS = {
     "empty": EMPTY_SOURCE, "long": LONG_SOURCE,
-    "conflict": "Оставьте один источник. Для обработки файла очистите поле «Исходный текст». Для обработки текста снимите выбор файла.",
+    "conflict": "Чтобы обезличить файлы, очистите поле «Исходный текст». Чтобы обработать текст, снимите выбор файлов.",
     "format": "Этот формат не поддерживается. Сохраните документ в TXT, DOCX или PDF и выберите его снова.",
     "empty_file": "Выбранный файл пуст. Выберите документ с текстом или сканом.",
-    "large_file": "Файл больше 12 МиБ. Загрузите его в разделе «Пакет файлов», где можно выбрать файл до 64 МиБ.",
+    "large_file": "Файл больше 64 МиБ. Разделите его на части размером до 64 МиБ.",
+    "multiple_preview": "Предпросмотр доступен для текста или одного файла. Оставьте один файл либо нажмите «Обезличить и сохранить».",
 }
-
 
 @bp.after_request
 def mark_workspace(response):
@@ -84,10 +84,9 @@ def materials():
 def page(*, original="", record=None, error="", error_field="", status=200, preview=False, ticket=""):
     history = materials() if request.method == "GET" and record is None and not error else None
     return render_template("redaction/index.html", history=history, history_query=HISTORY_QUERY,
-                           batch_limit=redaction_batch.BATCH_MAX_BYTES, record=record, original=original,
-                           error=error, error_field=error_field, empty_hint=redaction_batch.BATCH_EMPTY,
-                           batch_error=error if error_field=="batch" else "", hints=INPUT_HINTS, text_limit=MAX_TEXT,
-                           file_limit=MAX_BYTES, profiles=PROFILES, formats=SUPPORTED, categories=CATEGORIES,
+                           record=record, original=original if len(original) <= MAX_TEXT else "",
+                           error=error, error_field=error_field, hints=INPUT_HINTS, text_limit=MAX_TEXT,
+                           file_limit=BATCH_MAX_BYTES, profiles=PROFILES, formats=SUPPORTED, categories=CATEGORIES,
                            groups=GROUPS, preview=preview, ticket=ticket, nonce=secrets.token_hex(16)), status
 
 
@@ -97,8 +96,15 @@ def index():
         return ""
     if request.method == "GET":
         return page()
-    if request.content_length is None or request.content_length > MAX_BYTES + 300_000:
-        return page(error=INPUT_HINTS["large_file"], error_field="file", status=413)
+    source = request.form.get("text", "").replace("\r\n", "\n")
+    files = redaction_batch.selected_files()
+    preview = "preview" in request.form
+    if files and source.strip():
+        return page(error=INPUT_HINTS["conflict"], error_field="text", status=422)
+    if len(files) > 1:
+        if preview:
+            return page(error=INPUT_HINTS["multiple_preview"], error_field="file", status=422)
+        return redaction_batch.add_selected_files(redaction_batch.reserve_batch(), files)
     owner = g.user["id"]
     db = get_db()
     nonce = request.form.get("nonce")
@@ -108,49 +114,52 @@ def index():
     def previous():
         return db.execute("SELECT record_id FROM redaction_requests WHERE user_id=? AND nonce=?", (owner, nonce)).fetchone()
 
-    if nonce and not request.form.get("preview") and (record := previous()):
+    if nonce and not preview and (record := previous()):
         return redirect(url_for("redaction.show", record_id=record["record_id"]))
-    source = request.form.get("text", "").replace("\r\n", "\n")
-    upload = request.files.get("file")
-    note = ""
-    table_secrets = 0
-    field = "file" if upload and upload.filename else "text"
+    profile = request.form.get("profile", "faceless")
+    glossary = request.form.get("glossary", "")
+    groups = request.form.getlist("groups") if request.form.get("groups_shown") else None
+    field = "file" if files else "text"
     try:
-        if upload and upload.filename:
-            if source.strip():
-                field = "text"
-                raise ValueError(INPUT_HINTS["conflict"])
+        if files:
+            upload = files[0]
             ext = upload.filename.rpartition(".")[2].lower() if "." in upload.filename else ""
             if ext not in SUPPORTED:
                 raise ValueError(INPUT_HINTS["format"])
+            policy = policy_for(profile, glossary, groups)
             with tempfile.NamedTemporaryFile(prefix="ismanager-upload-") as local:
-                upload.save(local)
-                if not local.tell():
+                size = 0
+                while chunk := upload.stream.read(redaction_batch.CHUNK):
+                    size += len(chunk)
+                    if size > BATCH_MAX_BYTES:
+                        raise ValueError(INPUT_HINTS["large_file"])
+                    local.write(chunk)
+                if not size:
                     raise ValueError(INPUT_HINTS["empty_file"])
-                if local.tell() > MAX_BYTES:
-                    raise ValueError(INPUT_HINTS["large_file"])
                 local.flush()
-                source, note, table_secrets = extract_isolated(local.name, ext, batch=False, with_counts=True)
-        profile = request.form.get("profile", "faceless")
-        groups = request.form.getlist("groups") if request.form.get("groups_shown") else None
-        result = analyze(source, profile, request.form.get("glossary", ""), groups)
-        result.field_secret_count += table_secrets
+                source, note, table_secrets = extract_isolated(local.name, ext, with_counts=True, timeout=63)
+            result, stats, notes = analyze_document(source, policy, table_secrets, note, timeout=65)
+        else:
+            analyzed = analyze(source, profile, glossary, groups)
+            result, stats, notes = analyzed.text, analyzed.stats(), analyzed.warnings
     except TimeoutError:
         return page(error="Обработка превысила время ожидания. Разделите материал на части и обработайте их по очереди.", status=422)
     except NlpUnavailable:
         return page(error=redaction_batch.ERRORS["model"], status=422)
-    except PrivacyError:
-        return page(error=redaction_batch.ERRORS["verification"], status=422)
+    except PrivacyError as exc:
+        return page(error=redaction_batch.ERRORS[redaction_batch.failure(exc)], status=422)
     except SettingsError as exc:
         return page(error=str(exc), error_field=exc.field, status=422)
     except ValueError as exc:
         return page(error=str(exc), error_field=field, status=422)
-    record = {"profile": profile, "stats": result.stats(), "notes": ([note] if note else []) + result.warnings,
-              "result": result.text}
-    if request.form.get("preview"):
+    record = {"profile": profile, "stats": stats, "notes": notes, "result": result}
+    if preview:
+        if len(result.encode()) > 8 * 1024**2:
+            return page(error="Результат слишком велик для предпросмотра. Выберите файл снова и нажмите «Обезличить и сохранить».",
+                        error_field=field, status=422)
         # Only a digest and the checked report are signed. The browser retains the preview.
         metadata = {k: record[k] for k in ("profile", "stats", "notes")}
-        ticket = preview_signer().dumps([owner, secrets.token_hex(16), result_hash(result.text), metadata])
+        ticket = preview_signer().dumps([owner, secrets.token_hex(16), result_hash(result), metadata])
         return page(original=source, record=record, preview=True, ticket=ticket)
     record_id = save_result(owner, nonce, record)
     return page(original=source, record=load_record(record_id))

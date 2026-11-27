@@ -22,23 +22,28 @@ def run(origin, baseline):
         if not baseline:
             native = browser.new_page(java_script_enabled=False)
             native.goto(origin + "/redaction/")
-            native.get_by_role("button", name="Создать пакет").click()
-            expect(native.locator("#batch-upload-error")).to_contain_text("Выберите хотя бы один файл")
-            field = native.locator("#batch-upload input[type=file]")
-            expect(field).to_be_focused()
-            field.set_input_files({"name": "native.txt", "mimeType": "text/plain", "buffer": b"sample"})
-            native.get_by_role("button", name="Создать пакет").click()
-            expect(native.locator("#batch-results")).to_contain_text("Всего 1")
+            native.get_by_role("button", name="Обезличить и сохранить").click()
+            expect(native.locator("#redaction-error")).to_contain_text("Исходный текст")
+            field = native.locator('#redaction-form input[type="file"]')
+            expect(native.locator("main [aria-invalid=true]")).to_be_focused()
+            field.set_input_files([
+                {"name": "native.txt", "mimeType": "text/plain", "buffer": b"first sample"},
+                {"name": "second.txt", "mimeType": "text/plain", "buffer": b"second sample"},
+            ])
+            native.get_by_role("button", name="Обезличить и сохранить").click()
+            expect(native.locator("#batch-results")).to_contain_text("Всего 2")
             native.get_by_text("Добавить файлы", exact=True).click()
+            field = native.locator("#batch-upload input[type=file]")
             native.get_by_role("button", name="Добавить в пакет").click()
             expect(native.locator("#batch-upload-error")).to_contain_text("нажмите «Добавить в пакет»")
+            expect(field).to_be_focused()
             native.close()
             source = owner.locator('#redaction-form textarea[name="text"]')
             source.fill("Синтетический текст")
             upload = owner.locator('#redaction-form input[type="file"]')
             upload.set_input_files({"name": "sample.txt", "mimeType": "text/plain", "buffer": b"sample"})
             owner.get_by_role("button", name="Предпросмотр без сохранения").click()
-            expect(owner.locator("#redaction-error")).to_contain_text("Оставьте один источник")
+            expect(owner.locator("#redaction-error")).to_contain_text("очистите поле «Исходный текст»")
             with owner.expect_event("dialog") as warning:
                 owner.evaluate("setTimeout(() => location.reload(), 0)")
             assert warning.value.type == "beforeunload"
@@ -47,14 +52,15 @@ def run(origin, baseline):
             # Discard the synthetic draft before creating an unrelated batch.
             owner.once("dialog", lambda dialog: dialog.accept())
             owner.reload()
-        if not baseline:
+        if baseline:
             owner.locator("#batch-upload button").click()
-            expect(owner.locator("#batch-upload-error")).to_contain_text("Выберите хотя бы один файл")
-            batch_field = owner.locator("#batch-upload input[type=file]")
-            expect(batch_field).to_be_focused()
-            batch_field.set_input_files({"name": "sample.txt", "mimeType": "text/plain", "buffer": b"sample"})
-            expect(owner.locator("#batch-upload-error")).to_be_empty()
-        owner.locator("#batch-upload button").click()
+        else:
+            batch_field = owner.locator('#redaction-form input[type="file"]')
+            batch_field.set_input_files([
+                {"name": "sample.txt", "mimeType": "text/plain", "buffer": b"first sample"},
+                {"name": "second.txt", "mimeType": "text/plain", "buffer": b"second sample"},
+            ])
+            owner.get_by_role("button", name="Обезличить и сохранить").click()
         expect(owner.get_by_role("heading", name="Пакет №", level=1)).to_be_visible()
         batch = urlsplit(owner.url).path
         owner.get_by_role("link", name="IS Manager", exact=True).click()

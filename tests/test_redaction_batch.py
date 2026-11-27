@@ -8,7 +8,7 @@ import zipfile
 
 import pytest
 
-from app import create_app, redaction_batch as jobs
+from app import create_app, redaction, redaction_batch as jobs
 from app.auth import digest
 from app.db import get_db
 from test_platform import first_login, token
@@ -31,7 +31,7 @@ def setup(tmp_path):
 def create(client):
     page = client.get("/redaction/")
     csrf = token(page)
-    nonce = re.search(rb'id="batch-upload".*?name="nonce" value="([a-f0-9]+)"',page.data,re.S)[1].decode()
+    nonce = re.search(rb'id="redaction-form".*?name="nonce" value="([a-f0-9]+)"',page.data,re.S)[1].decode()
     data = dict(csrf_token=csrf,nonce=nonce)
     headers = {"Accept": "application/json"}
     where = client.post("/redaction/batches",data=data,headers=headers).json["url"]
@@ -51,7 +51,7 @@ def test_native_batch_form_needs_a_file_and_accepts_the_first_document(setup):
     missing = client.post("/redaction/batches", data={**fields, "file": (io.BytesIO(), "")})
     assert missing.status_code == 422
     body = missing.get_data(as_text=True)
-    assert jobs.BATCH_EMPTY in body and 'aria-invalid="true" autofocus' in body
+    assert redaction.INPUT_HINTS["empty"] in body and 'aria-invalid="true" autofocus' in body
     assert "от 1 до 60 000" not in body
     with app.app_context():
         assert get_db().execute("SELECT count(*) FROM redaction_batches").fetchone()[0] == 0
@@ -59,7 +59,7 @@ def test_native_batch_form_needs_a_file_and_accepts_the_first_document(setup):
         response = client.post("/redaction/batches", data={**fields, "file": (io.BytesIO(b"sample"), "sample.txt")})
         assert response.status_code == 303
     batch = response.location
-    missing = client.post(batch + "/files", data=fields)
+    missing = client.post(batch + "/files", data=fields, content_type="multipart/form-data")
     assert missing.status_code == 422 and jobs.ADD_EMPTY in missing.get_data(as_text=True)
     assert 'class="panel batch-add" open' in missing.get_data(as_text=True)
     assert "Всего 1" in client.get(batch).get_data(as_text=True)
