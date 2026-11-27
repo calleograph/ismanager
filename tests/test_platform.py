@@ -111,3 +111,14 @@ def test_configurable_access_policy(app):
     for i in range(5):
         res = guest.post("/login", data=dict(username="missing", password="bad", csrf_token=token(guest.get("/login"))))
     assert res.status_code == 429 and "2 мин" in res.get_data(as_text=True)
+
+
+def test_concurrent_boot_initializes_all_modules(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    config = dict(TESTING=True, DATA_DIR=str(tmp_path), SECRET_KEY=secrets.token_hex(32))
+    def boot(_):
+        with create_app(config).app_context():
+            return get_db().execute("SELECT COUNT(*) FROM redaction_batch_files").fetchone()[0]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        assert list(pool.map(boot, range(6))) == [0] * 6

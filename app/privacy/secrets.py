@@ -303,3 +303,75 @@ def _find(text: str) -> list[Found]:
         if t and _random_looking(t.group(0)):
             out.append(Found(m.end() + t.start(), m.end() + t.end(), "secret", "entropy_near_marker"))
     return out
+
+
+# Ticket fields can contain short PINs, ordinary passphrases and YAML block scalars.
+_FIELD = re.compile(
+    r"""(?ix)(?<!\w)["']?(?: (?:new[_-]?|temp(?:orary)?[_-]?|db[_-]?)?pass(?:word|wd|phrase)
+    | pwd | (?:client|app|shared)[_-]?secret | secret | (?:api|access|refresh|auth|session)[ _-]?(?:key|token)
+    | token | otp | totp | pin(?:[ -]?code)? | cvv | пароль(?:[ \t]+(?:к|от|для)[ \t]+[\w.-]+)?
+    | (?:одноразовый|временный|резервный)[ \t]+код | (?:пин[ -]?код|код[ \t]+(?:доступа|подтверждения))
+    | секрет(?:ный[ \t]+ключ)? | токен | ключ[ \t]+(?:доступа|api|апи) )["']?[ \t]*[:=][ \t]*"""
+)
+_QUOTED = re.compile(r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|«[^»]*»''')
+_REDACTED = "[секрет удалён]"
+
+
+def explicit_fields(text):
+    import json
+
+    pos = 0
+    while match := _FIELD.search(text, pos):
+        start = match.end()
+        end = text.find("\n", start)
+        end = len(text) if end < 0 else end
+        line = text[start:end].strip()
+        if not line or re.fullmatch(r"[|>][+-]?\d?", line):
+            parent = text[text.rfind("\n", 0, match.start()) + 1:match.start()]
+            indent = len(parent) - len(parent.lstrip(" \t"))
+            first = end + 1
+            while end < len(text):
+                stop = text.find("\n", end + 1)
+                stop = len(text) if stop < 0 else stop
+                following = text[end + 1:stop]
+                if following.strip() and len(following) - len(following.lstrip(" \t")) <= indent:
+                    if end + 1 == first and not line:
+                        end = stop
+                    break
+                end = stop
+        elif text[start] in ('"', "'", '«') and (quoted := _QUOTED.match(text, start)):
+            start, end = start + 1, quoted.end() - 1
+        elif text.startswith(_REDACTED, start):
+            tail = text[start + len(_REDACTED):end]
+            if not tail.strip() or tail.startswith((",", ";", "}", "\t")):
+                end = start + len(_REDACTED)
+        elif text[start] in '{[':
+            try:
+                _, end = json.JSONDecoder().raw_decode(text, start)
+            except (ValueError, RecursionError):
+                pass
+        elif text[start:start + 1].isdigit() and text[match.start():match.start() + 1] == '"':
+            number = re.match(r'\d+(?=\s*[,}])', text[start:end])
+            if number:
+                end = start + number.end()
+        pos = max(match.end(), end)
+        if start < end and text[start:end].strip() not in ("", _REDACTED):
+            yield Found(start, end, "secret", "ticket_field")
+
+
+def mask_explicit_fields(text):
+    from .known_values import mask_known_values
+
+    pieces, values, pos = [], set(), 0
+    total = 0
+    for field in explicit_fields(shadow(text)):
+        pieces.extend((text[pos:field.start], _REDACTED))
+        value = text[field.start:field.end].strip()
+        if len(value) >= 4:
+            values.add(value)
+        pos, total = field.end, total + 1
+    if not total:
+        return text, 0
+    pieces.append(text[pos:])
+    masked, repeated = mask_known_values("".join(pieces), values)
+    return masked, total + repeated

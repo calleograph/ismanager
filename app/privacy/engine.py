@@ -196,8 +196,13 @@ class Result:
     warnings: list[str] = field(default_factory=list)
     candidates: list[dict] = field(default_factory=list)      # спорные кандидаты в люди, оставленные текстом: {start, end, reason} (лаборатория)
 
+    field_secret_count: int = 0
+
     def stats(self) -> dict[str, int]:
-        return dict(Counter(r.category for r in self.replacements))
+        counts = Counter(r.category for r in self.replacements)
+        if self.field_secret_count:
+            counts["secret"] += self.field_secret_count
+        return dict(counts)
 
 
 _LEMMA_TOKEN = re.compile(r"[A-Za-zА-Яа-яЁё0-9]+(?:[-.][A-Za-zА-Яа-яЁё0-9]+)*")
@@ -284,6 +289,8 @@ class Anonymizer:
         """Непересекающиеся находки (с приоритетом категорий) и их тип для NER: [(находка, PER|ORG|LOC|'')]."""
         text = shadow(text)
         self._rejected, self._orgs = [], []
+        self._why.clear()
+        self._cyr.clear()
         cands: list[tuple[Found, str]] = [(f, "") for f in find_secrets(text)]
         cands += [(f, "") for f in find_structured(text, internal_domains=self.policy.internal_domains, public_domains=self.policy.public_domains)]
         if self.policy.use_faceless:
@@ -307,6 +314,12 @@ class Anonymizer:
                 if cat == "organization" and self.policy.org_scope == "legal" and not _LEGAL.search(text[max(0, start - 6):end]):
                     continue
                 cands.append((Found(start, end, cat, "ner"), s.kind))
+            # A ticket may put a full name in a username field. Its first word alone
+            # would outrank the complete NER span and leave the surname in the output.
+            name_ends = dict(people)
+            cands = [(Found(f.start, name_ends[f.start], f.category, f.rule), kind)
+                     if f.category == "login" and name_ends.get(f.start, 0) > f.end else (f, kind)
+                     for f, kind in cands]
             lower = _lowercase_transcript(text)
             if lower:                                          # стенограмма без заглавных букв: кандидаты — слова, которые словарь считает частями имени
                 people += _lower_name_runs(text)

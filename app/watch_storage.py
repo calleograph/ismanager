@@ -272,9 +272,10 @@ class _ServerConnections(dict):
 
 
 class _SMB:
-    def __init__(self, path, options):
+    def __init__(self, path, options, server_guid):
         self.path = path
         self.options = options
+        self.server_guid = server_guid
 
     def unc(self, name):
         return self.path + "\\" + name
@@ -344,6 +345,15 @@ class Directory:
     def __init__(self, backend):
         self._io = backend
 
+    def identity(self):
+        if isinstance(self._io, _Local):
+            st = os.fstat(self._io.fd)
+            return ("local", st.st_dev, st.st_ino)
+        import smbclient
+        with _smb_errors():
+            st = smbclient.stat(self._io.path, follow_symlinks=False, **self._io.options)
+        return ("smb", self._io.server_guid, st.st_dev, st.st_ino) if st.st_ino else None
+
     def probe(self):
         with self._io.scan() as listing:
             next(iter(listing), None)
@@ -352,9 +362,12 @@ class Directory:
         return _snapshot(name, self._io.stat(_component(name)))
 
     def list_media(self):
+        return self.list_files(MEDIA_EXTENSIONS)
+
+    def list_files(self, extensions):
         with self._io.scan() as listing:
             for entry in listing:
-                if entry.name.startswith(".") or Path(entry.name).suffix.lower() not in MEDIA_EXTENSIONS:
+                if entry.name.startswith(".") or Path(entry.name).suffix.lower() not in extensions:
                     continue
                 try:
                     yield self.stat(entry.name)
@@ -426,7 +439,7 @@ class Directory:
                     raise FileExistsError("Имеющийся TXT занят или не допускает безопасную замену.") from None
             yield stream
 
-    def publish_text(self, name, text, *, previous_sha256=None):
+    def publish_text(self, name, text, *, previous_sha256=None, allow_identical=True):
         _component(name)
         data = text.encode("utf-8")
         if Path(name).suffix.lower() != ".txt" or len(data) > MAX_TXT:
@@ -455,7 +468,7 @@ class Directory:
                 return
             except FileExistsError:
                 old = self._output_hash(name)
-            if old == current_sha:
+            if old == current_sha and allow_identical:
                 if isinstance(self._io, _Local):
                     os.fsync(self._io.fd)
                 return
@@ -539,7 +552,7 @@ def open_storage(resource, secret_key, watch_root=None, *, folder="", create=Fal
                    auth_protocol="ntlm", connection_timeout=10)
     try:
         with _smb_errors():
-            smbclient.register_session(cfg["server"], **options)
+            session = smbclient.register_session(cfg["server"], **options)
             unc = "\\\\" + cfg["server"] + "\\" + cfg["share"]
             for part in parts:
                 unc += "\\" + part
@@ -552,7 +565,7 @@ def open_storage(resource, secret_key, watch_root=None, *, folder="", create=Fal
                 st = smbclient.stat(unc, follow_symlinks=False, **options)
                 if not mode.S_ISDIR(st.st_mode) or st.st_file_attributes & 0x400:
                     raise ValueError("Ожидался каталог SMB без точки повторной обработки.")
-            directory = Directory(_SMB(unc, options))
+            directory = Directory(_SMB(unc, options, session.connection.server_guid))
         with _smb_errors():
             yield directory
     finally:

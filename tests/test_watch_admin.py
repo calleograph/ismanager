@@ -148,3 +148,48 @@ def test_rules_cannot_share_physical_input_via_other_resources(setup, kind):
     assert "Эта входная папка уже используется" in duplicate.get_data(as_text=True)
     other_folder = post("/admin/watches/new", name="Обработка Б", input_resource=second_id, input_folder="Резерв")
     assert other_folder.status_code == 302
+
+
+@pytest.mark.parametrize("storage_kind", ["local", "smb"])
+def test_redaction_destinations_and_physical_cycles(setup, storage_kind):
+    app, client, post = setup
+    common = {"kind": storage_kind}
+    if storage_kind == "smb":
+        common.update(server="file.test", username="watch", password="sample", share="Общая")
+    root = post("/admin/storage/new", **common, name="Общий ресурс", path="").location
+    sub = post("/admin/storage/new", **common, name="Выход", path="Готовые").location
+    root_id, sub_id = (int(url.rsplit("/", 1)[1]) for url in (root, sub))
+    form = dict(name="Архив заявок", kind="redaction", input_resource=root_id, input_folder="Заявки",
+                output_resource=sub_id, enabled="on")
+    new = "/admin/watches/new"
+    chosen = client.get(new + "?kind=redaction").get_data(as_text=True)
+    assert 'name="kind" value="redaction"' in chosen and 'Обезличено IS Manager' in chosen
+    assert 'name="delete_source"' not in chosen
+    one = post(new, **form, delete_source="on")
+    assert one.status_code == 302
+    assert post(new, **(form | {"name": "Лишнее"})).status_code == 400
+    assert post(one.location, **(form | {"kind": "transcription"})).status_code == 400
+    asr = post(new, **(form | {"kind": "transcription", "name": "Встречи"}))
+    assert asr.status_code == 302
+    assert "Встречи" not in client.get("/admin/watches/?kind=redaction").get_data(as_text=True)
+    other_source = dict(input_resource=root_id, input_folder="Отдел", output_resource=root_id)
+    for route in (
+        {"input_resource": root_id, "input_folder": "Готовые", "output_resource": root_id, "output_folder": "Готовые"},
+        {"input_resource": root_id, "input_folder": "Готовые"},
+        {**other_source, "output_folder": "Заявки"},
+        {**other_source, "output_folder": "Отдел"},
+    ):
+        assert post(new, name="Конфликт", kind="redaction", **route).status_code == 400
+    assert post(new + "?kind=redaction", name="Отдельно", kind="redaction", input_resource=root_id,
+                input_folder="Архив отдела").status_code == 302
+    with app.app_context():
+        db = get_db()
+        saved = db.execute("SELECT * FROM watch_rules WHERE name=?", (form["name"],)).fetchone()
+        assert saved["delete_source"] == 0 and saved["kind"] == "redaction"
+        row = db.execute("""INSERT INTO watch_files(rule_id,name,stamp,state,seen_since,updated,output_key,output_name,recoveries)
+                            VALUES (?,'большой.pdf','v','failed',1,1,'путь','результат.txt',2)""", (saved["id"],))
+        file_id = row.lastrowid
+        db.commit()
+    assert post(one.location, action="retry", file_id=file_id).status_code == 302
+    with app.app_context():
+        assert tuple(get_db().execute("SELECT state,recoveries FROM watch_files WHERE id=?", (file_id,)).fetchone()) == ("queued", 0)

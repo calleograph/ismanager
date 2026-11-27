@@ -81,7 +81,7 @@ def backup():
     with tempfile.TemporaryDirectory(dir=target.parent) as tmp:
         data = Path(tmp) / "data.tar.gz"
         with data.open("wb") as fd:
-            compose("run", "--rm", "-T", "--no-deps", "--entrypoint", "tar", "web", "-czf", "-", "-C", "/data", ".", stdout=fd)
+            compose("run", "--rm", "-T", "--no-deps", "--entrypoint", "tar", "web", "--exclude=./redaction-batch", "-czf", "-", "-C", "/data", ".", stdout=fd)
         with tarfile.open(Path(tmp) / "archive", "w") as out:
             header = tarfile.TarInfo("manifest.json")
             header.mode = 0o600

@@ -6,9 +6,10 @@ from flask import abort, current_app, flash, g, redirect, render_template, reque
 from . import watch_storage
 from .auth import protected
 from .db import audit, get_db
-from .folder_watch import storage_location
+from .folder_watch import output_location, storage_location
 
 RESOURCE_FIELDS = ("kind", "path", "server", "share", "domain", "username", "port")
+KINDS = {"transcription": "Транскрибация", "redaction": "Обезличивание"}
 ROUTE_FIELDS = ("input_resource", "input_folder", "output_resource", "output_folder")
 STATES = {
     "settling": "Ожидается завершение записи", "queued": "В очереди", "running": "Распознаётся",
@@ -126,6 +127,9 @@ def resource_edit(resource_id=None):
 
 def watches():
     db = get_db()
+    kind = request.args.get("kind", "")
+    if kind and kind not in KINDS:
+        abort(400)
     rows = db.execute("""
         SELECT r.*,i.name AS input_name,
                datetime(nullif(r.last_scan,0),'unixepoch') AS scan_time,
@@ -134,8 +138,8 @@ def watches():
                                    OR (f.state IN ('queued','publishing') AND f.error!='')) AS errors
         FROM watch_rules r JOIN watch_resources i ON i.id=r.input_resource
         LEFT JOIN watch_files f ON f.rule_id=r.id
-        GROUP BY r.id ORDER BY r.name""").fetchall()
-    return render_template("watch/rules.html", rules=rows)
+        WHERE (?='' OR r.kind=?) GROUP BY r.id ORDER BY r.name""", (kind, kind)).fetchall()
+    return render_template("watch/rules.html", rules=rows, kinds=KINDS, kind=kind)
 
 
 def chosen_resource(db, key, *, optional=False):
@@ -150,34 +154,51 @@ def chosen_resource(db, key, *, optional=False):
     return number
 
 
+def validate_rule_folders(db, proposed, rule_id):
+    resources = {r["id"]: r for r in db.execute("SELECT id,kind,path,server,port,share FROM watch_resources")}
+
+    def folders(rule):
+        output, folder = output_location(rule)
+        return (storage_location(resources[rule["input_resource"]], rule["input_folder"]),
+                storage_location(resources[output], folder))
+
+    source, target = folders(proposed)
+    redact = proposed["kind"] == "redaction"
+    if redact and source == target:
+        raise ValueError("Для обезличенного текста выберите другую выходную папку.")
+    for other in db.execute("SELECT * FROM watch_rules WHERE id!=? AND kind=?", (rule_id, proposed["kind"])):
+        other_source, other_target = folders(other)
+        if source == other_source:
+            raise ValueError("Эта входная папка уже используется в другом правиле того же назначения.")
+        if redact and (source == other_target or target == other_source):
+            raise ValueError("Вход одного правила обезличивания не может быть выходом другого.")
+
+
 def save_rule(db, row):
     name = display_name()
+    kind = request.form.get("kind", row["kind"] if row else request.args.get("kind", "transcription"))
+    if kind not in KINDS or (row and kind != row["kind"]):
+        raise ValueError("Выберите назначение при создании нового правила.")
     source = chosen_resource(db, "input_resource")
     target = chosen_resource(db, "output_resource", optional=True)
     input_folder = watch_storage.relative_folder(request.form.get("input_folder", ""))
     output_folder = watch_storage.relative_folder(request.form.get("output_folder", ""))
     if target is None and output_folder:
         raise ValueError("Для выбранной выходной подпапки укажите ресурс хранения.")
-    source_changed = not row or (source, input_folder) != (row["input_resource"], row["input_folder"])
-    if source_changed or "enabled" in request.form:
-        location = storage_location(record(db, "watch_resources", source), input_folder)
-        others = db.execute("""SELECT i.kind,i.path,i.server,i.port,i.share,r.input_folder
-                               FROM watch_rules r JOIN watch_resources i ON i.id=r.input_resource
-                               WHERE r.id!=?""", (row["id"] if row else 0,))
-        if any(storage_location(other, other["input_folder"]) == location for other in others):
-            raise ValueError("Эта входная папка уже используется в другом правиле наблюдения. Выберите другую папку.")
     route = (source, input_folder, target, output_folder)
+    if not row or route != tuple(row[k] for k in ROUTE_FIELDS) or "enabled" in request.form:
+        validate_rule_folders(db, dict(kind=kind, **dict(zip(ROUTE_FIELDS, route))), row["id"] if row else 0)
     if row and route != tuple(row[k] for k in ROUTE_FIELDS) and db.execute(
         "SELECT 1 FROM watch_files WHERE rule_id=? LIMIT 1", (row["id"],)
     ).fetchone():
         raise ValueError("Для изменения папок правила с историей обработки создайте новое правило.")
-    params = (name, *route, int("delete_source" in request.form), int("enabled" in request.form))
+    params = (name, *route, int(kind == "transcription" and "delete_source" in request.form), int("enabled" in request.form))
     if row:
         db.execute("""UPDATE watch_rules SET name=?,input_resource=?,input_folder=?,output_resource=?,output_folder=?,
                       delete_source=?,enabled=?,last_scan=0 WHERE id=?""", (*params, row["id"]))
         return row["id"]
     return db.execute("""INSERT INTO watch_rules(name,input_resource,input_folder,output_resource,output_folder,
-                         delete_source,enabled) VALUES (?,?,?,?,?,?,?)""", params).lastrowid
+                         delete_source,enabled,kind) VALUES (?,?,?,?,?,?,?,?)""", (*params, kind)).lastrowid
 
 
 def rule_edit(rule_id=None):
@@ -186,7 +207,10 @@ def rule_edit(rule_id=None):
     if action is not None:
         db.execute("BEGIN IMMEDIATE")
     row = record(db, "watch_rules", rule_id) if rule_id is not None else None
-    form = dict(row or {"name": "", "input_resource": None, "input_folder": "", "output_resource": None,
+    kind = request.args.get("kind", "transcription")
+    if kind not in KINDS:
+        abort(400)
+    form = dict(row or {"name": "", "kind": kind, "input_resource": None, "input_folder": "", "output_resource": None,
                         "output_folder": "", "enabled": True, "delete_source": False})
     error = ""
     if action is not None:
@@ -194,6 +218,7 @@ def rule_edit(rule_id=None):
             with db:
                 if action == "save":
                     form.update({key: request.form.get(key, "") for key in ("name", *ROUTE_FIELDS)})
+                    form["kind"] = request.form.get("kind", form["kind"])
                     form.update(enabled="enabled" in request.form, delete_source="delete_source" in request.form)
                     rule_id = save_rule(db, row)
                     message = "Правило сохранено."
@@ -209,7 +234,7 @@ def rule_edit(rule_id=None):
                 elif action == "retry" and row:
                     file_id = request.form.get("file_id", type=int)
                     if not file_id or not 0 < file_id < 2**63 or not db.execute(
-                        """UPDATE watch_files SET state='queued',retry_at=0,error=''
+                        """UPDATE watch_files SET state='queued',retry_at=0,recoveries=0,error=''
                            WHERE id=? AND rule_id=? AND state='failed'""", (file_id, rule_id)
                     ).rowcount:
                         raise ValueError("В этом правиле нет такой записи для повтора.")
@@ -227,8 +252,9 @@ def rule_edit(rule_id=None):
             error = "Название правила или входная папка уже используется. Проверьте настройки правила."
     files = []
     if row:
-        files = db.execute("""SELECT id,name,output_name,state,error,datetime(updated,'unixepoch') AS changed
+        files = db.execute("""SELECT id,name,output_name,state,error,processing_note,datetime(updated,'unixepoch') AS changed
                               FROM watch_files WHERE rule_id=? ORDER BY updated DESC,id DESC LIMIT 50""", (rule_id,)).fetchall()
     choices = db.execute("SELECT id,name FROM watch_resources ORDER BY name").fetchall()
+    states = STATES | {"running": "Обезличивается"} if form["kind"] == "redaction" else STATES
     return render_template("watch/rule.html", rule_id=rule_id, row=row, data=form, choices=choices,
-                           files=files, states=STATES, error=error), 400 if error else 200
+                           files=files, states=states, kinds=KINDS, error=error), 400 if error else 200

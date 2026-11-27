@@ -69,6 +69,7 @@ def wait_healthy(container):
         if state.startswith(("dead ", "exited ")):
             break
         time.sleep(1)
+    subprocess.run(["docker", "logs", "--tail", "40", container], check=False)
     raise RuntimeError(f"{container} failed its Docker healthcheck ({state})")
 
 

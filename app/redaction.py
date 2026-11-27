@@ -1,26 +1,25 @@
 """User-scoped redaction. Only the result and aggregate counts enter the database."""
 import json
-import os
 import re
 import secrets
-import subprocess
-import sys
 import tempfile
 
 from flask import Blueprint, Response, abort, g, redirect, render_template, request, url_for
 
+from . import redaction_batch
 from .db import get_db
-from .privacy.engine import Anonymizer, CATEGORIES, Policy, PrivacyError, Term
+from .privacy.engine import CATEGORIES, PrivacyError
 from .privacy.export import MIMES, export
-from .privacy.files import MAX_BYTES, MAX_TEXT, SUPPORTED
+from .privacy.files import MAX_BYTES, SUPPORTED, extract_isolated
 from .privacy.names import NlpUnavailable
-from .privacy.verify import independent_check
+from .privacy.processing import GROUPS, PROFILES, analyze
 
 bp = Blueprint("redaction", __name__, url_prefix="/redaction")
-PROFILES = {"faceless": "Полный · Faceless", "strict": "Строгий · Переговорка", "basic": "Базовый · Переговорка"}
+redaction_batch.register(bp)
 
 
 def init_db(db):
+    redaction_batch.init_db(db)
     db.executescript("""
         CREATE TABLE IF NOT EXISTS redactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -35,45 +34,11 @@ def init_db(db):
     """)
 
 
-GROUPS = {
-    "personal": ("Люди, контакты и документы", ("person", "location", "address", "phone", "email", "id_number", "health", "bank")),
-    "business": ("Организации и коммерческие сведения", ("organization", "doc_number", "money", "marker", "project")),
-    "network": ("Учётные записи и инфраструктура", ("ip", "host", "url", "login")),
-}
-
-
-def analyze(source, profile, glossary="", groups=None):
-    if profile not in PROFILES:
-        raise ValueError("Выберите профиль обработки.")
-    if not source.strip() or len(source) > MAX_TEXT:
-        raise ValueError("Требуется от 1 до 60 000 знаков исходного текста.")
-    words = [s.strip() for s in glossary.splitlines() if s.strip()]
-    if len(words) > 48 or any(len(w) > 96 or w.startswith("re:") for w in words):
-        raise ValueError("Допустимо до 48 буквальных терминов длиной до 96 знаков.")
-    policy = Policy.from_profile("strict" if profile == "faceless" else profile,
-                                 use_faceless=profile == "faceless", terms=[Term(w) for w in words])
-    if groups is not None:
-        if set(groups) - GROUPS.keys():
-            raise ValueError("Неизвестная группа данных.")
-        for key, (_, categories) in GROUPS.items():
-            if key not in groups:
-                policy.actions.update(dict.fromkeys(categories, "keep"))
-    engine = Anonymizer(policy)
-    result = engine.process(source)
-    if independent_check(result.text, policy):
-        again = engine.process(result.text)
-        if independent_check(again.text, policy):
-            raise PrivacyError("verification_failed", "Повторная проверка обнаружила остаточные данные. Выдача результата остановлена.")
-        result.text = again.text
-        result.replacements.extend(again.replacements)
-        result.warnings.extend(again.warnings + ["Проведён дополнительный проход."])
-    return result
-
-
 def page(*, original="", record=None, error="", status=200, preview=False):
     rows = get_db().execute("SELECT id,created,profile FROM redactions WHERE user_id=? ORDER BY id DESC",
                             (g.user["id"],)).fetchall()
-    return render_template("redaction/index.html", rows=rows, record=record, original=original,
+    batches = redaction_batch.history(get_db(), g.user["id"], request.args.get("before_batch",type=int))
+    return render_template("redaction/index.html", rows=rows, batches=batches[:20], more_batches=len(batches)>20, batch_limit=redaction_batch.BATCH_MAX_BYTES, record=record, original=original,
                            error=error, profiles=PROFILES, formats=SUPPORTED, categories=CATEGORIES, groups=GROUPS, preview=preview, nonce=secrets.token_hex(16)), status
 
 
@@ -97,28 +62,23 @@ def index():
     source = request.form.get("text", "")
     upload = request.files.get("file")
     note = ""
+    table_secrets = 0
     try:
         if upload and upload.filename:
             if source.strip():
                 raise ValueError("Используйте один источник за раз — текстовое поле или файл.")
             ext = upload.filename.rsplit(".", 1)[-1].lower()
-            raw = upload.stream.read(MAX_BYTES+1)
-            if ext not in SUPPORTED or len(raw) > MAX_BYTES:
-                raise ValueError("Проверьте формат и размер файла (до 12 МиБ).")
-            with tempfile.TemporaryDirectory(prefix="ismanager-extract-") as staging:
-                proc = subprocess.run([sys.executable, "-m", "app.privacy.files", ext],
-                                      input=raw, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                      env={"PATH": os.defpath + ":/usr/local/bin", "TMPDIR": staging, "LC_ALL": "C.UTF-8"}, timeout=63)
-            if proc.returncode:
-                raise ValueError("Файл превысил пределы обработки.")
-            decoded = json.loads(proc.stdout)
-            if "error" in decoded:
-                raise ValueError(decoded["error"])
-            source, note = decoded["text"], decoded["note"]
+            if ext not in SUPPORTED:
+                raise ValueError("Формат файла не поддерживается.")
+            with tempfile.NamedTemporaryFile(prefix="ismanager-upload-") as local:
+                upload.save(local)
+                local.flush()
+                source, note, table_secrets = extract_isolated(local.name, ext, batch=False, with_counts=True)
         profile = request.form.get("profile", "faceless")
         groups = request.form.getlist("groups") if request.form.get("groups_shown") else None
         result = analyze(source, profile, request.form.get("glossary", ""), groups)
-    except (TimeoutError, subprocess.TimeoutExpired):
+        result.field_secret_count += table_secrets
+    except TimeoutError:
         return page(error="Обработка превысила время ожидания. Разделите материал на части.", status=422)
     except (PrivacyError, NlpUnavailable):
         return page(error="Не удалось подтвердить обезличивание. Проверьте доступность моделей и формат текста.", status=422)

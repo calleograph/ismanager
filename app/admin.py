@@ -79,7 +79,7 @@ def index():
         (SELECT COUNT(*) FROM sessions WHERE expires>unixepoch()) AS sessions,
         (SELECT COUNT(*) FROM transcripts WHERE status='queued') +
         (SELECT COUNT(*) FROM watch_files f JOIN watch_rules r ON r.id=f.rule_id
-         WHERE r.enabled AND f.state='queued') AS queued""").fetchone()
+         WHERE r.enabled AND r.kind='transcription' AND f.state='queued') AS queued""").fetchone()
     events = db.execute("""SELECT a.time,a.event,u.username,t.username AS target FROM audit a
         LEFT JOIN users u ON u.id=a.actor LEFT JOIN users t ON t.id=a.target_user
         ORDER BY a.id DESC LIMIT 25""").fetchall()

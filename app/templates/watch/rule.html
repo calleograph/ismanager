@@ -5,8 +5,16 @@
 <h1>{{ data.name if rule_id else 'Новое правило наблюдения' }}</h1>
 {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
 {% if choices %}
+{% if not rule_id %}
+<nav class="actions" aria-label="Назначение правила">
+  {% for key,label in kinds.items() %}
+    <a class="btn {{ 'secondary' if data.kind != key }}" href="{{ url_for('admin.watch_edit', kind=key) }}" {% if data.kind==key %}aria-current="page"{% endif %}>{{ label }}</a>
+  {% endfor %}
+</nav>
+{% else %}<p>{{ kinds[row.kind] }}</p>{% endif %}
 <form method="post" class="panel">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="kind" value="{{ data.kind }}">
   <label>Название правила<input name="name" value="{{ data.name }}" maxlength="120" required></label>
   <fieldset><legend>Входная папка</legend>
     <label>Входной ресурс<select name="input_resource" required><option value="">Выберите ресурс</option>
@@ -15,15 +23,19 @@
     <label>Входная подпапка<input name="input_folder" value="{{ data.input_folder }}" placeholder="Пусто для корневой папки"></label>
   </fieldset>
   <fieldset><legend>Куда сохранять тексты</legend>
-    <label>Выходной ресурс<select name="output_resource"><option value="">Папка «Тексты IS Manager» внутри входной папки</option>
+    <label>Выходной ресурс<select name="output_resource"><option value="">Папка «{{ 'Обезличено IS Manager' if data.kind=='redaction' else 'Тексты IS Manager' }}» внутри входной папки</option>
       {% for option in choices %}<option value="{{ option.id }}" {{ 'selected' if data.output_resource|int == option.id }}>{{ option.name }}</option>{% endfor %}
     </select></label>
     <label>Подпапка выбранного выходного ресурса<input name="output_folder" value="{{ data.output_folder }}" placeholder="Пусто для корневой папки ресурса"></label>
   </fieldset>
-  <p>GigaAM распознаёт русскую речь и сохраняет текст с таймкодами.</p>
   <label><input type="checkbox" name="enabled" {{ 'checked' if data.enabled }}> Включить наблюдение</label>
+  {% if data.kind=='redaction' %}
+  <p>Обезличенный текст сохраняется в TXT с новым именем. Исходный документ остаётся во входной папке.</p>
+  {% else %}
+  <p>GigaAM распознаёт русскую речь и сохраняет текст с таймкодами.</p>
   <label><input type="checkbox" name="delete_source" aria-describedby="deletion-help" {{ 'checked' if data.delete_source }}> Удалять обработанный исходный файл после сохранения текста</label>
   <p class="muted" id="deletion-help">После включения удаляются новые или изменённые записи, когда обработчик сохранит и проверит их текст. Исходники прежних расшифровок сохраняются.</p>
+  {% endif %}
   <button name="action" value="save">Сохранить правило</button>
 </form>
 {% else %}
@@ -32,7 +44,7 @@
 </section>
 {% endif %}
 {% if row %}
-<section class="panel"><h2>Обработка записей</h2>
+<section class="panel"><h2>Обработка файлов</h2>
   {% if row.error %}<p class="notice error" role="alert">{{ row.error }}</p>{% endif %}
   <form method="post" class="actions">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -45,6 +57,7 @@
     <tbody>{% for f in files %}
     <tr><td>{{ f.changed }}</td><td>{{ f.name }}</td><td>{{ states.get(f.state, f.state) }}
       {% if f.error %}<p>{{ f.error }}</p>{% endif %}
+      {% if f.state=='done' and f.processing_note %}<p>{{ f.processing_note }}</p>{% endif %}
       {% if f.state == 'failed' %}<form method="post">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="file_id" value="{{ f.id }}">
         <button class="secondary" name="action" value="retry">Повторить обработку</button>

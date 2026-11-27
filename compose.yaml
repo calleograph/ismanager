@@ -40,6 +40,29 @@ services:
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     init: true
+  redactor:
+    image: ${COMPOSE_PROJECT_NAME:-ismanager}-web:${APP_REVISION:-local}
+    command: ["python", "-m", "app.redaction_worker"]
+    environment:
+      SECRET_KEY: ${SECRET_KEY:?Запустите install.sh}
+      DATA_DIR: /data
+      WATCH_POLL_SECONDS: ${WATCH_POLL_SECONDS:-15}
+    volumes:
+      - data:/data
+      - watch:/watch
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    init: true
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.redaction_worker", "health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 1m
+
 volumes:
   data:
     name: ${DATA_VOLUME:-ismanager_data}

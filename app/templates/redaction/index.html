@@ -18,6 +18,24 @@
   {% if not preview %}<form method="post" action="{{ url_for('redaction.delete', record_id=record.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="secondary" type="submit" data-confirm="Удалить этот результат из истории?">Удалить результат</button></form>{% endif %}
 </section>
 {% endif %}
+<section class="panel">
+  <h2>Пакет файлов</h2>
+  <p>Выберите документы для обработки в фоне. Для каждого применяется полный профиль Faceless с проверкой результата. Готовые тексты можно скачать по одному или архивом ZIP.</p>
+  <form id="batch-upload" method="post" action="{{ url_for('redaction.create_batch') }}" data-create data-limit="{{ batch_limit }}" data-formats="{{ formats|join(',') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="nonce" value="{{ nonce }}">
+    <label class="batch-js" hidden>Файлы до {{ batch_limit//1048576 }} МиБ каждый<input type="file" multiple></label>
+    <button type="submit">Создать пакет</button>
+  </form>
+  <p role="status" id="batch-upload-status"></p><a hidden id="batch-upload-link">Открыть пакет</a>
+  {% if g.user.admin %}<p><a href="{{ url_for('admin.watch_edit',kind='redaction') }}">Настроить правило для папок</a></p>{% endif %}
+</section>
+{% if batches %}
+<section class="panel"><h2>Мои пакеты</h2><ul>{% for item in batches %}
+  <li><a href="{{ url_for('redaction.batch',batch_id=item.id) }}">Пакет № {{ item.id }}</a> · {{ item.created }} UTC</li>
+{% endfor %}</ul>
+{% if more_batches %}<a href="{{ url_for('redaction.index',before_batch=batches[-1].id) }}">Предыдущие пакеты</a>{% endif %}
+</section>
+{% endif %}
 <form method="post" enctype="multipart/form-data" class="panel" id="redaction-form">
   <h2>Новая обработка</h2>
   <input type="hidden" name="nonce" value="{{ nonce }}">
@@ -40,4 +58,4 @@
 {% endif %}
 {% endblock %}
 
-{% block scripts %}<script src="{{ url_for('static',filename='redaction.js') }}" defer></script>{% endblock %}
+{% block scripts %}<script src="{{ url_for('static',filename='redaction.js') }}" defer></script><script src="{{ url_for('static',filename='redaction_batch.js') }}" defer></script>{% endblock %}

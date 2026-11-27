@@ -144,6 +144,7 @@ def test_live_samba(tmp_path):
                 time.sleep(1)
         docker("exec",name,"sh","-c","printf 'sample' > /data/test.wav && chmod 666 /data/test.wav")
         with ws.open_storage(cfg, app.secret_key) as store:
+            volume_root = store.identity()
             with pytest.raises(OSError), ws.open_storage(invalid, app.secret_key) as wrong:
                 wrong.probe()
             snap, = store.list_media()
@@ -154,6 +155,8 @@ def test_live_samba(tmp_path):
             assert store.delete_source(snap, digest(b"sample"))
             assert not store.delete_source(snap, digest(b"sample"))
         with ws.open_storage(cfg, app.secret_key, folder="архив/готово", create=True) as out:
+            folder_id = out.identity()
+            assert folder_id is not None and folder_id != volume_root
             out.publish_text("текст.txt", "первая")
             out.publish_text("текст.txt", "первая")
             with pytest.raises(FileExistsError):
@@ -161,6 +164,7 @@ def test_live_samba(tmp_path):
             out.publish_text("текст.txt", "вторая", previous_sha256=digest("первая".encode()))
             assert out.read_text("текст.txt") == "вторая"
         with ws.open_storage(cfg, app.secret_key, folder="архив/готово", create=True) as again:
+            assert again.identity() == folder_id
             assert again.read_text("текст.txt") == "вторая"
     finally:
         subprocess.run(["docker", "rm", "-fv", name], capture_output=True)

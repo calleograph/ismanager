@@ -18,7 +18,7 @@ jobs:
       - name: Install Ubuntu OCR packages
         run: |
           sudo apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=- -o Acquire::Retries=3 update -qq
-          sudo apt-get install -y tesseract-ocr-rus tesseract-ocr-eng poppler-utils
+          sudo apt-get install -y antiword catdoc tesseract-ocr-rus tesseract-ocr-eng poppler-utils
       - run: pip install -r requirements.txt pytest playwright
       - run: python -m app.privacy.fetch_models "$PRIVACY_NLP_DIR"
       - run: python scripts/manage.py --help && bash -n install.sh && node --test tests/passgen.test.cjs
@@ -62,7 +62,7 @@ jobs:
           web=$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q web)")
           worker=$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q worker)")
           "$RUNNER_TEMP/network-test/bin/python" -m tests.live_network "$web" "$worker"
-      - name: Transcribe local and domain SMB folders with real GigaAM
+      - name: Check local and SMB transcription, SMB redaction and browser batch upload
         run: |
           export CHROMIUM_PATH="$(command -v google-chrome)"
           web=$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q web)")
@@ -72,8 +72,11 @@ jobs:
       - name: Back up and restore a new installation
         run: |
           docker compose exec -T web sh -c 'echo before > /data/ci-snapshot'
+          docker compose exec -T web sh -c 'mkdir -p /data/redaction-batch && echo synthetic > /data/redaction-batch/backup-test'
           ./scripts/manage.py backup
           archive=$(find .runtime/backups -name '*.tar' -type f -print -quit)
+          tar -xOf "$archive" data.tar.gz | tar -tzf - > "$RUNNER_TEMP/ismanager-archive-contents"
+          if grep -q redaction-batch/backup-test "$RUNNER_TEMP/ismanager-archive-contents"; then exit 1; fi
           docker compose exec -T web sh -c 'echo after > /data/ci-snapshot'
           ./scripts/manage.py restore "$archive"
           test "$(docker compose exec -T web cat /data/ci-snapshot)" = before

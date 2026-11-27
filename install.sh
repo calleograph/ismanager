@@ -110,7 +110,7 @@ chmod 755 .runtime/control
 network_only=0
 if ((existing_env && ${#network_args[@]})) && \
    [[ "$(sed -n 's/^APP_REVISION=//p' .env)" == "$(git rev-parse --short=12 HEAD)" ]] && \
-   [[ -n "$(docker compose ps --status running -q web)" && -n "$(docker compose ps --status running -q worker)" ]]; then
+   [[ -n "$(docker compose ps --status running -q web)" && -n "$(docker compose ps --status running -q worker)" && -n "$(docker compose ps --status running -q redactor)" ]]; then
   network_only=1
 fi
 if ((! operator_only && !network_only)); then

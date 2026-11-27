@@ -10,6 +10,9 @@ import re
 import secrets
 import subprocess
 import time
+import tempfile
+from io import BytesIO
+from zipfile import ZipFile
 
 from playwright.sync_api import sync_playwright
 
@@ -28,6 +31,7 @@ def eventually(check, seconds=180):
 def run(web_image, worker_image, model_volume):
     prefix = "ism-watch-test-" + secrets.token_hex(5)
     web, worker, dc = (prefix + "-" + part for part in ("web", "worker", "dc"))
+    redactor = prefix + "-redactor"
     data, watch = prefix + "-data", prefix + "-watch"
     fixture_image = "ismanager-ad-fixture:test"
     docker("build", "-q", "-t", fixture_image, str(Path(__file__).parent / "active_directory"))
@@ -57,6 +61,12 @@ def run(web_image, worker_image, model_volume):
                worker_image, env=env)
         remove("rm", "-f", worker)
         wait_healthy(worker)
+        docker("run", "-d", "--name", redactor, "--network", prefix, "--cap-drop", "ALL", "-e", "SECRET_KEY",
+               "-e", "WATCH_POLL_SECONDS=2", "-v", data + ":/data", "-v", watch + ":/watch",
+               "--health-cmd", "python -m app.redaction_worker health", "--health-interval", "3s",
+               web_image, "python", "-m", "app.redaction_worker", env=env)
+        remove("rm", "-f", redactor)
+        wait_healthy(redactor)
         docker("exec", worker, "mkdir", "-p", "/watch/incoming")
         docker("cp", str(SAMPLE), worker + ":/tmp/sample.ogg")
         origin = f"http://127.0.0.1:{published_port(web)}"
@@ -110,6 +120,56 @@ def run(web_image, worker_image, model_volume):
         eventually(lambda: exists(worker, local_result))
         assert docker("exec", worker, "cat", local_result) == original
         print("GigaAM записал оба TXT с тайм-кодами. Удалён только выбранный исходник. Утерянный TXT восстановлен.")
+
+        rule = post("/admin/watches/new", kind="redaction", name="Заявки", input_resource=incoming,
+                    input_folder="", output_resource=outgoing, output_folder="safe", enabled="on")
+        assert page.goto(origin + rule).ok
+        ticket = b"ticket;password;contact\nclosed;synthetic test phrase;demo@sample.invalid\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            document = Path(tmp) / "private-name.csv"
+            document.write_bytes(ticket)
+            docker("cp", str(document), dc + ":/srv/watch-input/" + document.name)
+
+        def results():
+            return docker("exec", dc, "sh", "-c",
+                          "if test -d /srv/watch-output/safe; then ls -1 /srv/watch-output/safe; fi").splitlines()
+
+        eventually(lambda: len(results()) == 1)
+        [filename] = results()
+        assert re.fullmatch(r"ismanager-redacted-[0-9a-f]{32}\.txt", filename)
+        content = docker("exec", dc, "cat", "/srv/watch-output/safe/" + filename)
+        assert "closed" in content and "synthetic test phrase" not in content and "demo@" not in content
+        assert exists(dc, "/srv/watch-input/private-name.csv")
+        print("Доменная папка дала обезличенный TXT с нейтральным именем. Оригинал сохранён.", flush=True)
+        check_batch(page, origin, ticket)
+
+
+def check_batch(page, origin, ticket):
+    page.goto(origin + "/redaction/")
+    files = page.locator('input[type="file"][multiple]')
+    files.set_input_files([
+        {"name": "private-person.csv", "mimeType": "text/csv", "buffer": ticket},
+        {"name": "second.log", "mimeType": "text/plain", "buffer": "Заявка закрыта. Пароль: blue otter".encode()},
+        {"name": "broken.pdf", "mimeType": "application/pdf", "buffer": b"broken document"},
+    ])
+    files.locator("xpath=ancestor::form").locator('button[type="submit"]').first.click()
+    page.wait_for_url(re.compile(r"/redaction/batches/[^/]+/?$"), timeout=60000)
+    details = page.url.rstrip("/")
+    def archive_ready():
+        reply = page.request.get(details + "/archive.zip")
+        if reply.status != 200 or not reply.body().startswith(b"PK"):
+            return False
+        with ZipFile(BytesIO(reply.body())) as archive:
+            names = archive.namelist()
+            if len(names) != 2:
+                return False
+            assert all(re.fullmatch(r"[\w.-]+\.txt", name) and "private" not in name for name in names)
+            text = "\n".join(archive.read(name).decode("utf-8") for name in names)
+            assert "closed" in text and "Заявка" in text and "blue otter" not in text
+            assert not any(marker in text for marker in ("demo@", "synthetic test phrase", "broken document"))
+        return True
+    eventually(archive_ready)
+    print("Пакет из трёх файлов принят в Chromium. Два проверенных TXT скачаны в ZIP, повреждённый PDF изолирован.")
 
 
 if __name__ == "__main__":

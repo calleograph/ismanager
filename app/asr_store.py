@@ -4,6 +4,49 @@ import time
 from pathlib import Path
 
 
+RULE_TABLE = """CREATE TABLE {table} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+            kind TEXT NOT NULL DEFAULT 'transcription' CHECK(kind IN ('transcription','redaction')),
+            input_resource INTEGER NOT NULL REFERENCES watch_resources(id), input_folder TEXT NOT NULL DEFAULT '',
+            output_resource INTEGER REFERENCES watch_resources(id), output_folder TEXT NOT NULL DEFAULT '',
+            delete_source INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,
+            last_scan INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
+            CHECK(kind!='redaction' OR delete_source=0),
+            UNIQUE(kind,input_resource,input_folder)
+        )"""
+
+
+def migrate_rules(db):
+    # SQLite cannot drop the 0.3.0 UNIQUE(input_resource,input_folder) constraint in place.
+    # Preserve child rows and the old ID high-water mark across the atomic parent-table swap.
+    foreign_keys = db.execute("PRAGMA foreign_keys").fetchone()[0]
+    db.execute("PRAGMA foreign_keys=OFF")
+    try:
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(watch_rules)")}
+            if not columns:
+                db.execute(RULE_TABLE.format(table="watch_rules"))
+            elif "kind" not in columns:
+                ident = db.execute("SELECT seq FROM sqlite_sequence WHERE name='watch_rules'").fetchone()
+                db.execute(RULE_TABLE.format(table="watch_rules_new"))
+                fields = "id,name,input_resource,input_folder,output_resource,output_folder,delete_source,enabled,last_scan,error"
+                db.execute(f"INSERT INTO watch_rules_new ({fields}) SELECT {fields} FROM watch_rules")
+                db.execute("DROP TABLE watch_rules")
+                db.execute("ALTER TABLE watch_rules_new RENAME TO watch_rules")
+                if ident:
+                    db.execute("UPDATE sqlite_sequence SET seq=? WHERE name='watch_rules'", (ident[0],))
+            file_columns = {row[1] for row in db.execute("PRAGMA table_info(watch_files)")}
+            if "publish_intent" not in file_columns:
+                db.execute("ALTER TABLE watch_files ADD COLUMN publish_intent INTEGER NOT NULL DEFAULT 0")
+            if "processing_note" not in file_columns:
+                db.execute("ALTER TABLE watch_files ADD COLUMN processing_note TEXT NOT NULL DEFAULT ''")
+            if "recoveries" not in file_columns:
+                db.execute("ALTER TABLE watch_files ADD COLUMN recoveries INTEGER NOT NULL DEFAULT 0")
+    finally:
+        db.execute("PRAGMA foreign_keys=" + ("ON" if foreign_keys else "OFF"))
+
+
 def init_db(db):
     db.executescript("""
         CREATE TABLE IF NOT EXISTS transcripts (
@@ -28,14 +71,6 @@ def init_db(db):
             server TEXT NOT NULL DEFAULT '', share TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 445,
             domain TEXT NOT NULL DEFAULT '', username TEXT NOT NULL DEFAULT '', password TEXT NOT NULL DEFAULT ''
         );
-        CREATE TABLE IF NOT EXISTS watch_rules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
-            input_resource INTEGER NOT NULL REFERENCES watch_resources(id), input_folder TEXT NOT NULL DEFAULT '',
-            output_resource INTEGER REFERENCES watch_resources(id), output_folder TEXT NOT NULL DEFAULT '',
-            delete_source INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,
-            last_scan INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
-            UNIQUE(input_resource, input_folder)
-        );
         CREATE TABLE IF NOT EXISTS watch_files (
             id INTEGER PRIMARY KEY AUTOINCREMENT, rule_id INTEGER NOT NULL REFERENCES watch_rules(id) ON DELETE CASCADE,
             name TEXT NOT NULL, stamp TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'settling',
@@ -44,12 +79,14 @@ def init_db(db):
             source_sha TEXT NOT NULL DEFAULT '', timed_text TEXT NOT NULL DEFAULT '', result_stamp TEXT NOT NULL DEFAULT '',
             published_sha TEXT NOT NULL DEFAULT '', output_stamp TEXT NOT NULL DEFAULT '',
             replaced INTEGER NOT NULL DEFAULT 0, remove_after INTEGER NOT NULL DEFAULT 0,
-            fallback_sha TEXT NOT NULL DEFAULT '',
+            fallback_sha TEXT NOT NULL DEFAULT '', publish_intent INTEGER NOT NULL DEFAULT 0,
+            processing_note TEXT NOT NULL DEFAULT '', recoveries INTEGER NOT NULL DEFAULT 0,
             UNIQUE(rule_id,name)
         );
         CREATE INDEX IF NOT EXISTS watch_files_queue ON watch_files(state,retry_at,updated);
         CREATE INDEX IF NOT EXISTS watch_content ON watch_files(source_sha) WHERE source_sha!='';
     """)
+    migrate_rules(db)
 
 
 def source_path(data_dir, job_id):

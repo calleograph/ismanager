@@ -2,6 +2,7 @@
 
 
 def create_app(config=None):
+    import fcntl
     import hmac
     import os
     import secrets
@@ -54,7 +55,9 @@ def create_app(config=None):
     for module in modules:
         app.register_blueprint(module.bp)
     app.teardown_appcontext(db.close_db)
-    with app.app_context():
+    # Gunicorn starts multiple app factories against the same fresh WAL database.
+    with app.app_context(), (directory / ".schema.lock").open("a+b") as schema_lock:
+        fcntl.flock(schema_lock, fcntl.LOCK_EX)
         connection = db.get_db()
         db.init_db(connection)
         for module in modules:

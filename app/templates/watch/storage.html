@@ -16,7 +16,7 @@
       <td><code>{% if item.kind == 'smb' %}//{{ item.server }}/{{ item.share }}/{% endif %}{{ item.path }}</code></td></tr>
     {% endfor %}</tbody>
   </table>
-  {% else %}<p>Добавьте папку, из которой обработчик будет брать записи или в которую он будет сохранять тексты.</p>{% endif %}
+  {% else %}<p>Добавьте входную папку или папку для сохранения обработанных текстов.</p>{% endif %}
 </section>
 <a href="{{ url_for('admin.watches') }}">Наблюдение за папками</a>
 {% endblock %}

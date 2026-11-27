@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 WORKDIR /opt/ismanager
-RUN apt-get -o Acquire::Retries=3 update && apt-get install -y --no-install-recommends ca-certificates libgomp1 poppler-utils tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus && rm -rf /var/lib/apt/lists/*
+RUN apt-get -o Acquire::Retries=3 update && apt-get install -y --no-install-recommends ca-certificates libgomp1 antiword catdoc poppler-utils tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus && rm -rf /var/lib/apt/lists/*
 COPY requirements*.txt ./
 RUN pip install -r requirements.txt && pip check
 COPY app/privacy/fetch_models.py /tmp/fetch_models.py

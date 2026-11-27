@@ -15,7 +15,8 @@ Apache License 2.0 распространяется на исходный код
 | Lucide | ISC и уведомления исходных наборов, локальный SVG-спрайт с приложенной лицензией |
 | Slovnet, Navec, Natasha, Razdel | MIT, локальное распознавание именованных сущностей |
 | pymorphy3 и русские словари OpenCorpora | Код библиотеки MIT, данные словаря CC BY-SA 3.0, морфология |
-| FFmpeg, Poppler, Tesseract | Системные пакеты Debian с собственными лицензиями в образе, используются через отдельные процессы |
+| FFmpeg, Poppler, Tesseract, Antiword, Catdoc | Системные пакеты Debian с собственными лицензиями в образе, используются через отдельные процессы |
+| python-calamine, striprtf, chardet, olefile | Чтение бинарных книг Excel, RTF и определение кодировки. [python-calamine · MIT](https://pypi.org/project/python-calamine/0.9.1/) · [striprtf · BSD-3-Clause](https://pypi.org/project/striprtf/0.0.35/) · [chardet · 0BSD](https://pypi.org/project/chardet/7.7.0/) · [olefile и лицензия](https://pypi.org/project/olefile/0.47/) |
 | python-docx, openpyxl, Pillow, defusedxml | Обработка документов и изображений. Пакеты установлены со своими файлами лицензий |
 | GigaAM v3, Silero VAD, PyTorch, TorchAudio, ONNX Runtime | Зависимости выделенного обработчика речи. Веса GigaAM загружаются отдельно от исходников |
 

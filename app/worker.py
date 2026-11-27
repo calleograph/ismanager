@@ -302,7 +302,7 @@ def main():
                 if resume_after_lock:
                     with db:
                         db.execute("UPDATE transcripts SET status='queued' WHERE status='running'")
-                        db.execute("UPDATE watch_files SET state='queued' WHERE state='running'")
+                    folder_watch.recover(db, data)
                     resume_after_lock = False
                 uploaded = work(db, data, engine)
                 watched = folder_watch.work(db, data, engine, secret)
