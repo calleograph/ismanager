@@ -8,6 +8,8 @@ def get_db():
     if "db" not in g:
         g.db = sqlite3.connect(current_app.config["DATABASE"], timeout=20)
         g.db.row_factory = sqlite3.Row
+        # SQLite NOCASE only covers ASCII. Directory names and audit searches may be Cyrillic.
+        g.db.create_function("casefold", 1, str.casefold, deterministic=True)
         g.db.execute("PRAGMA foreign_keys=ON")
     return g.db
 
@@ -31,6 +33,7 @@ def init_db(db):
             token TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
             expires INTEGER NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id,expires);
         CREATE TABLE IF NOT EXISTS attempts (
             key TEXT PRIMARY KEY, count INTEGER NOT NULL, until INTEGER NOT NULL
         );
@@ -48,12 +51,21 @@ def init_db(db):
             id INTEGER PRIMARY KEY, time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             actor INTEGER, event TEXT NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS audit_event ON audit(event);
     """)
 
+    # Gunicorn workers may open an existing database concurrently after an update.
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        if "disabled" not in {col[1] for col in db.execute("PRAGMA table_info(users)")}:
+            db.execute("ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0")
+        if "target_user" not in {col[1] for col in db.execute("PRAGMA table_info(audit)")}:
+            db.execute("ALTER TABLE audit ADD COLUMN target_user INTEGER REFERENCES users(id)")
 
-def audit(event, actor=None):
+
+def audit(event, actor=None, *, target=None):
     db = get_db()
-    db.execute("INSERT INTO audit(actor,event) VALUES (?,?)", (actor, event))
+    db.execute("INSERT INTO audit(actor,event,target_user) VALUES (?,?,?)", (actor, event, target))
 
 
 def auth_settings():

@@ -11,5 +11,5 @@ COPY --chown=10001:10001 VERSION ./
 COPY --chown=10001:10001 app ./app
 USER 10001:10001
 EXPOSE 8443
-HEALTHCHECK --interval=10s --timeout=5s --start-period=1m CMD python -c "import ssl, urllib.request; urllib.request.urlopen('https://localhost:8443/healthz', context=ssl._create_unverified_context(), timeout=4).read()"
-CMD ["sh","-ec","python -m app.tls && exec gunicorn --certfile /data/tls.pem --keyfile /data/tls.pem --bind 0.0.0.0:8443 --workers 2 --threads 3 --timeout 180 'app:create_app()'"]
+HEALTHCHECK --interval=10s --timeout=5s --start-period=1m CMD ["python", "-m", "app.network", "health"]
+CMD ["python", "-m", "app.network"]

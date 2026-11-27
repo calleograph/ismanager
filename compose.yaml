@@ -6,7 +6,10 @@ services:
     environment:
       SECRET_KEY: ${SECRET_KEY:?Запустите install.sh}
       DATA_DIR: /data
+      ACCESS_MODE: ${ACCESS_MODE:-https}
       PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+      PUBLIC_PORT: ${PORT:-18443}
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
     volumes:
       - data:/data
       - ./.runtime/control:/control:ro

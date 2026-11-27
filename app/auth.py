@@ -6,7 +6,7 @@ import time
 import click
 import pyotp
 from cryptography.fernet import Fernet
-from flask import Blueprint, current_app, flash, g, redirect, render_template, request, session, url_for
+from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, session, url_for
 from flask.cli import with_appcontext
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -33,29 +33,43 @@ def reveal(text):
     return cipher().decrypt(text.encode()).decode()
 
 
-def limited(login):
-    """Reserve an attempt before the slow bind, including concurrent requests."""
+def reserve_login(login):
+    """Claim capacity for the credential check. Only failed attempts stay in the window."""
     db = get_db()
     now = int(time.time())
     policy = auth_settings()
+    ip_key = digest("ip:" + str(request.remote_addr))
+    user_key = digest("user:" + login.casefold())
+    reservations = []
     with db:
         db.execute("DELETE FROM attempts WHERE until<=?", (now,))
-        for key, maximum in ((digest("ip:" + str(request.remote_addr)), policy["attempts_ip"]),
-                             (digest("user:" + login.casefold()), policy["attempts_user"])):
-            db.execute("INSERT INTO attempts VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1",
-                       (key, now + policy["minutes"] * 60))
-            if db.execute("SELECT count FROM attempts WHERE key=?", (key,)).fetchone()[0] > maximum:
-                return True
-    return False
+        full = db.execute("SELECT 1 FROM attempts WHERE (key=? AND count>=?) OR (key=? AND count>=?)",
+                          (ip_key, policy["attempts_ip"], user_key, policy["attempts_user"])).fetchone()
+        if full:
+            return None
+        for key in (ip_key, user_key):
+            row = db.execute("INSERT INTO attempts VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1 "
+                             "RETURNING until", (key, now + policy["minutes"] * 60)).fetchone()
+            reservations.append((key, row["until"]))
+    return reservations
 
 
-def begin(user_id):
+def begin(user_id, reservations=()):
     db = get_db()
     now = int(time.time())
     new_sid = secrets.token_urlsafe(32)
     with db:
         db.execute("DELETE FROM sessions WHERE expires<=? OR token=?", (now, digest(session.get("sid", ""))))
-        db.execute("INSERT INTO sessions VALUES (?,?,?)", (digest(new_sid), user_id, now + 3600 * auth_settings()["hours"]))
+        # Access can change between the directory bind and issuing the cookie.
+        issued = db.execute("INSERT INTO sessions(token,user_id,expires) SELECT ?,id,? FROM users WHERE id=? AND disabled=0",
+                            (digest(new_sid), now + 3600 * auth_settings()["hours"], user_id))
+        if not issued.rowcount:
+            abort(401, description="Вход отклонён.")
+        if reservations:
+            # A slow LDAP bind can complete after a new window has started.
+            db.executemany("UPDATE attempts SET count=count-1 WHERE key=? AND until=? AND count>0", reservations)
+            db.executemany("DELETE FROM attempts WHERE key=? AND until=? AND count=0", reservations)
+            audit("login.ok", user_id)
     session.clear()
     session.permanent = True
     session["sid"] = new_sid
@@ -79,7 +93,8 @@ def login():
         return redirect(url_for("dashboard")) if g.user else render_template("login.html")
     name = request.form.get("username", "").strip()
     password = request.form.get("password", "")
-    if limited(name[:256]):
+    reservations = reserve_login(name[:256])
+    if reservations is None:
         return render_template("login.html", error=f"Слишком много попыток. Повторите через {auth_settings()['minutes']} мин."), 429
     db = get_db()
     user = None
@@ -95,10 +110,7 @@ def login():
         with db:
             audit("login.denied")
         return render_template("login.html", error="Вход отклонён. Проверьте данные и код, если включена двухфакторная защита."), 401
-    with db:
-        db.execute("DELETE FROM attempts WHERE key=?", (digest("user:" + name.casefold()),))
-        audit("login.ok", user["id"])
-    begin(user["id"])
+    begin(user["id"], reservations)
     return redirect(url_for("auth.account" if user["must_change"] else "dashboard"))
 
 

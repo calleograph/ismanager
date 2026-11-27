@@ -41,3 +41,14 @@ def test_backup_stream_is_forwarded(tmp_path):
     with output.open("wb") as fd:
         run(sys.executable, "-c", "import sys;sys.stdout.buffer.write(b'archive')", stdout=fd)
     assert output.read_bytes() == b"archive"
+
+
+def test_rollback_from_http_to_tls_only_release_keeps_running_instance(monkeypatch):
+    import pytest
+    monkeypatch.setattr(manage, "git", Mock(side_effect=["", "current", "previous", ""]))
+    monkeypatch.setattr(manage, "settings", lambda: {"ACCESS_MODE": "http"})
+    compose = Mock()
+    monkeypatch.setattr(manage, "compose", compose)
+    with pytest.raises(ValueError, match="--access https"):
+        manage.change_version("v0.1.3", rollback=True)
+    compose.assert_not_called()

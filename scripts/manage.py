@@ -161,6 +161,8 @@ def change_version(target, *, rollback=False):
     new = git("rev-parse", "--verify", target + "^{commit}")
     if new == old:
         return "Уже установлена актуальная версия."
+    if rollback and settings().get("ACCESS_MODE", "https") != "https" and not git("ls-tree", "--name-only", new, "app/network.py"):
+        raise ValueError("Предыдущий релиз поддерживает только прямой HTTPS. Выполните ./install.sh --access https перед откатом.")
     pending = STATE / "pending.json"
     journal = {"old": old, "new": new}
     replace(pending, json.dumps(journal))

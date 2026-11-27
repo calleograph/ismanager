@@ -11,11 +11,15 @@ from cryptography.hazmat.primitives.serialization import Encoding
 from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, url_for
 from ldap3.utils.dn import parse_dn
 
-from . import directory
+from . import directory, journal
+from .asr_store import model_status
 from .auth import digest, protected, reveal
 from .db import audit, auth_settings, get_db
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
+bp.add_url_rule("/journal/", "journal", journal.index)
+bp.add_url_rule("/journal/export.csv", "journal_csv", journal.export)
+bp.add_app_template_filter(journal.title, "audit_event")
 
 
 def profile_config(row):
@@ -62,7 +66,7 @@ def directory_login(login, password):
             db.execute("""INSERT INTO users(identity,username,display_name,admin) VALUES (?,?,?,?)
                 ON CONFLICT(identity) DO UPDATE SET username=excluded.username,
                 display_name=excluded.display_name,admin=excluded.admin""", (key, user.login, user.display_name, admin))
-        return db.execute("SELECT * FROM users WHERE identity=?", (key,)).fetchone()
+        return db.execute("SELECT * FROM users WHERE identity=? AND disabled=0", (key,)).fetchone()
     return None
 
 
@@ -70,16 +74,19 @@ def directory_login(login, password):
 def index():
     db = get_db()
     profiles = db.execute("SELECT id,name,enabled FROM directories ORDER BY coalesce(json_extract(config,'$.priority'),100),id").fetchall()
-    sessions = db.execute("""SELECT u.id,u.display_name,COUNT(*) AS n FROM sessions s JOIN users u
-        ON u.id=s.user_id WHERE s.expires>unixepoch() GROUP BY u.id ORDER BY u.display_name""").fetchall()
-    events = db.execute("""SELECT a.time,a.event,u.username FROM audit a LEFT JOIN users u ON u.id=a.actor
+    counts = db.execute("""SELECT (SELECT COUNT(*) FROM users) AS users,
+        (SELECT COUNT(*) FROM sessions WHERE expires>unixepoch()) AS sessions,
+        (SELECT COUNT(*) FROM transcripts WHERE status='queued') AS queued""").fetchone()
+    events = db.execute("""SELECT a.time,a.event,u.username,t.username AS target FROM audit a
+        LEFT JOIN users u ON u.id=a.actor LEFT JOIN users t ON t.id=a.target_user
         ORDER BY a.id DESC LIMIT 25""").fetchall()
     status = {}
     try:
         status = json.loads((Path(os.getenv("CONTROL_DIR", "/control")) / "status.json").read_text())
     except (OSError, ValueError):
         pass
-    return render_template("admin.html", profiles=profiles, sessions=sessions, events=events, status=status, policy=auth_settings())
+    return render_template("admin.html", profiles=profiles, counts=counts, events=events, status=status,
+                           policy=auth_settings(), model_status=model_status(current_app.config["DATA_DIR"]))
 
 
 @bp.post("/access")
@@ -96,13 +103,63 @@ def access():
     return redirect(url_for("admin.index"))
 
 
+@bp.get("/users/")
+def users():
+    db = get_db()
+    query = request.args.get("q", "").strip()[:256]
+    before = request.args.get("before", type=int)
+    active = request.args.get("active") == "1"
+    if before is not None and not 0 < before < 2**63:
+        abort(400)
+    rows = db.execute("""
+        SELECT u.id,u.username,u.display_name,u.admin,u.disabled,u.identity='local:admin' AS local,
+               u.totp IS NOT NULL AS has_totp,d.name AS directory,d.enabled AS directory_enabled,
+               (SELECT COUNT(*) FROM sessions WHERE user_id=u.id AND expires>unixepoch()) AS sessions
+        FROM users u LEFT JOIN directories d ON u.identity LIKE 'ldap:' || d.id || ':%'
+        WHERE (? IS NULL OR u.id<?) AND instr(casefold(u.username || ' ' || u.display_name), ?) > 0
+        AND (NOT ? OR EXISTS(SELECT 1 FROM sessions WHERE user_id=u.id AND expires>unixepoch()))
+        ORDER BY u.id DESC LIMIT 51
+    """, (before, before, query.casefold(), active)).fetchall()
+    return render_template("users.html", users=rows[:50], more=len(rows) > 50, query=query, before=before, active=active)
+
+
+@bp.post("/users/<int:user_id>/access")
+def user_access(user_id):
+    if user_id >= 2**63:
+        abort(404)
+    action = request.form.get("action")
+    if action not in {"disable", "enable"}:
+        abort(400)
+    disabled = int(action == "disable")
+    with get_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        user = db.execute("SELECT identity,disabled FROM users WHERE id=?", (user_id,)).fetchone()
+        if user is None:
+            abort(404)
+        if user["identity"] == "local:admin" or user_id == g.user["id"]:
+            abort(400, description="Для этой учётной записи изменение доступа недоступно.")
+        if user["disabled"] != disabled:
+            db.execute("UPDATE users SET disabled=? WHERE id=?", (disabled, user_id))
+            if disabled:
+                db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+            audit("user.disabled" if disabled else "user.enabled", g.user["id"], target=user_id)
+    flash("Доступ отключён. Сеансы завершены." if disabled else "Доступ включён.")
+    return redirect(url_for("admin.users", q=request.args.get("q"), before=request.args.get("before", type=int),
+                            active="1" if request.args.get("active") == "1" else None))
+
+
 @bp.post("/users/<int:user_id>/revoke")
 def revoke(user_id):
+    if user_id >= 2**63:
+        abort(404)
     with get_db() as db:
+        if not db.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone():
+            abort(404)
         db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
-        audit("sessions.revoked", g.user["id"])
+        audit("sessions.revoked", g.user["id"], target=user_id)
     flash("Сеансы пользователя завершены.")
-    return redirect(url_for("admin.index"))
+    return redirect(url_for("admin.users", q=request.args.get("q"), before=request.args.get("before", type=int),
+                            active="1" if request.args.get("active") == "1" else None))
 
 
 @bp.post("/maintenance")
@@ -214,7 +271,13 @@ def profile(profile_id):
                     person = directory.lookup(profile_config(row), user, True)
                     if person:
                         allowed, admin = roles(data, person.groups)
-                        steps.append(dict(step="access", ok=allowed, detail="Администратор" if admin else "Допуск разрешён" if allowed else "Доступ закрыт"))
+                        blocked = db.execute("SELECT 1 FROM users WHERE identity=? AND disabled=1",
+                                             (f"ldap:{row['id']}:{person.external_id}",)).fetchone()
+                        detail = "Администратор" if admin else "Допуск разрешён" if allowed else "Доступ закрыт"
+                        if blocked or not row["enabled"]:
+                            allowed = False
+                            detail = "Учётная запись отключена в IS Manager" if blocked else "Подключение отключено"
+                        steps.append(dict(step="access", ok=allowed, detail=detail))
             else:
                 abort(400)
         except (ValueError, ssl.SSLError, directory.LdapError, sqlite3.IntegrityError) as exc:

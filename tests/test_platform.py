@@ -1,3 +1,4 @@
+import json
 import re
 import secrets
 
@@ -51,6 +52,32 @@ def test_login_rate_limit(app):
     for i in range(13):
         response = c.post("/login", data=dict(username="missing", password="incorrect", csrf_token=token(c.get("/login"))))
     assert response.status_code == 429
+
+
+def test_admin_recording_queue_and_worker_heartbeat(app, tmp_path):
+    from app.worker import status
+
+    client, _ = first_login(app)
+    assert "Нет связи с обработчиком" in client.get("/admin/").get_data(as_text=True)
+    with app.app_context():
+        db = get_db()
+        owner = db.execute("INSERT INTO users(identity,username,display_name,admin) VALUES ('source','u','u',0)").lastrowid
+        db.executemany("INSERT INTO transcripts(id,owner,filename,status) VALUES (?,?,?,?)",
+                       [(str(i), owner, "private.wav", state)
+                        for i, state in enumerate(("queued", "queued", "running", "done", "failed"))])
+        db.commit()
+    label = "GigaAM v3 E2E RNNT готова к работе"
+    status(tmp_path, label, True)
+    page = client.get("/admin/").get_data(as_text=True)
+    assert label in page
+    assert "Записей в очереди — 2." in page
+    assert "private.wav" not in page
+    path = tmp_path / "asr-status.json"
+    state = json.loads(path.read_text())
+    state["time"] -= 181
+    path.write_text(json.dumps(state))
+    page = client.get("/admin/").get_data(as_text=True)
+    assert "Нет связи с обработчиком" in page and label not in page
 
 
 def test_totp_and_reset(app, monkeypatch):

@@ -1,0 +1,20 @@
+# IS Manager behind Nginx on the same host. Replace the DNS name and certificate paths.
+server {
+    listen 443 ssl;
+    server_name ismanager.example.org;
+
+    ssl_certificate     /etc/nginx/tls/ismanager.fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/ismanager.key;
+    client_max_body_size 513m;
+
+    location / {
+        proxy_pass http://127.0.0.1:18084;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_request_buffering off;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+    }
+}

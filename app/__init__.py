@@ -12,7 +12,7 @@ def create_app(config=None):
     from flask import Flask, abort, g, redirect, render_template, request, session, url_for
     from werkzeug.exceptions import HTTPException
 
-    from . import admin, auth, db, passwords, redaction, threats, transcription
+    from . import admin, auth, db, network, passwords, redaction, threats, transcription
 
     app = Flask(__name__)
     app.config.from_mapping(
@@ -20,7 +20,9 @@ def create_app(config=None):
         SECRET_KEY=os.getenv("SECRET_KEY"),
         SESSION_COOKIE_NAME="ismanager_session",
         SESSION_COOKIE_SAMESITE="Lax",
-        SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "1") == "1",
+        ACCESS_MODE=os.getenv("ACCESS_MODE", "https"),
+        PUBLIC_HOST=os.getenv("PUBLIC_HOST", "localhost"),
+        TRUSTED_PROXY_IPS=os.getenv("TRUSTED_PROXY_IPS", ""),
         PERMANENT_SESSION_LIFETIME=timedelta(days=7),
         MAX_CONTENT_LENGTH=16 * 1024**2,
         MAX_FORM_MEMORY_SIZE=5 * 1024**2,
@@ -29,6 +31,20 @@ def create_app(config=None):
     )
     if config:
         app.config.update(config)
+    mode = app.config["ACCESS_MODE"]
+    app.config.setdefault("PUBLIC_PORT", os.getenv("PUBLIC_PORT", "18443" if mode == "https" else "18084"))
+    app.config["PUBLIC_URL"] = network.public_url(mode, app.config["PUBLIC_HOST"], app.config["PUBLIC_PORT"])
+    if mode not in network.MODES:
+        raise ValueError("ACCESS_MODE должен быть https, http или proxy.")
+    if not config or "SESSION_COOKIE_SECURE" not in config:
+        app.config["SESSION_COOKIE_SECURE"] = mode != "http"
+    if mode == "http":
+        from flask.sessions import SecureCookieSessionInterface
+        app.config["SESSION_COOKIE_NAME"] = "ismanager_http_session"
+        app.session_interface = SecureCookieSessionInterface()
+        app.session_interface.salt = "ismanager-http-session"
+    if mode == "proxy":
+        network.install_proxy(app)
     if not app.secret_key or len(app.secret_key) < 32:
         raise RuntimeError("Задайте SECRET_KEY длиной от 32 символов через install.sh.")
     directory = Path(app.config["DATA_DIR"])

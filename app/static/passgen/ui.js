@@ -8,6 +8,12 @@
   const status = document.getElementById('pass-status');
   const submit = document.getElementById('pass-generate');
   let vocabulary;
+  const localAvailable = typeof globalThis.crypto?.getRandomValues === 'function';
+  if (!localAvailable) {
+    fields.processor.querySelector('option[value="browser"]').disabled = true;
+    fields.processor.value = 'server';
+    fields.processor.closest('details').open = true;
+  }
 
   function reset() {
     list.replaceChildren();
@@ -16,9 +22,13 @@
     for (const panel of form.querySelectorAll('[data-modes]')) {
       panel.hidden = !panel.dataset.modes.split(' ').includes(fields.mode.value);
     }
-    document.getElementById('pass-mode-note').textContent = fields.processor.value === 'browser'
-      ? 'Ваша фраза и полученные пароли остаются в этой вкладке.'
-      : 'Параметры и своя фраза передаются серверу IS Manager. Сервер возвращает пароли без записи в историю.';
+    const hint = document.getElementById('pass-mode-note');
+    if (fields.processor.value === 'browser') {
+      hint.textContent = 'Ваша фраза и полученные пароли остаются в этой вкладке.';
+    } else {
+      const reason = localAvailable ? '' : 'В браузере недоступен генератор случайных чисел. ';
+      hint.textContent = reason + 'По нажатию кнопки параметры и своя фраза передаются серверу IS Manager. Пароли не записываются в историю.';
+    }
   }
   async function loadWords() {
     if (!vocabulary) {

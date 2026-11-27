@@ -41,6 +41,24 @@ jobs:
           curl -fkSs https://localhost:18443/healthz
       - name: Recognize synthetic audio and video
         run: docker compose run --rm --no-deps -e PYTHONPATH=/opt/ismanager -v "$PWD/tests:/checks:ro" worker python /checks/live_asr.py
+      - name: Switch the installed instance between transports
+        run: |
+          worker=$(docker compose ps -q worker)
+          ./install.sh --shared-host --no-operator --access http --bind 127.0.0.1 --port 18084
+          curl -fsS http://127.0.0.1:18084/healthz
+          ./install.sh --shared-host --no-operator --access proxy --host ismanager.example.org
+          curl -fsS -H 'Host: ismanager.example.org' -H 'X-Forwarded-Proto: https' http://127.0.0.1:18084/healthz
+          ./install.sh --shared-host --no-operator --access https
+          curl -fkSs https://localhost:18443/healthz
+          test "$worker" = "$(docker compose ps -q worker)"
+      - name: Check LAN HTTP and HTTPS through Nginx in Chromium
+        run: |
+          python3 -m venv "$RUNNER_TEMP/network-test"
+          "$RUNNER_TEMP/network-test/bin/pip" install playwright
+          "$RUNNER_TEMP/network-test/bin/python" -m playwright install --with-deps chromium
+          web=$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q web)")
+          worker=$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q worker)")
+          "$RUNNER_TEMP/network-test/bin/python" -m tests.live_network "$web" "$worker"
       - name: Back up and restore a new installation
         run: |
           docker compose exec -T web sh -c 'echo before > /data/ci-snapshot'

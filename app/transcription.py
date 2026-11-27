@@ -1,6 +1,4 @@
 """Authenticated recording uploads, transcript editor and exports."""
-import json
-import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -9,7 +7,7 @@ from flask import (
     render_template, request, url_for,
 )
 
-from .asr_store import init_db, source_path
+from .asr_store import init_db, model_status, source_path
 from .db import get_db
 
 bp = Blueprint("transcription", __name__, url_prefix="/transcription")
@@ -35,16 +33,6 @@ def _job(job_id):
     if row is None:
         abort(404)
     return row
-
-
-def _model_status():
-    try:
-        status = json.loads((_data() / "asr-status.json").read_text())
-        if time.time() - status["time"] < 180:
-            return status["label"]
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
-    return "Нет связи с обработчиком. Загрузка в очередь доступна."
 
 
 @bp.route("/", methods=["GET", "POST"])
@@ -82,13 +70,13 @@ def index():
     jobs = db.execute("SELECT id,filename,status,created FROM transcripts WHERE owner=? ORDER BY rowid DESC",
                       (g.user["id"],)).fetchall()
     return render_template("transcription/index.html", jobs=jobs, status=STATUS,
-                           model_status=_model_status())
+                           model_status=model_status(_data()))
 
 
 @bp.get("/<job_id>")
 def detail(job_id):
     return render_template("transcription/detail.html", job=_job(job_id), status=STATUS,
-                           model_status=_model_status())
+                           model_status=model_status(_data()))
 
 
 @bp.post("/<job_id>/retry")

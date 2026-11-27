@@ -42,9 +42,16 @@ def test_ad_login(tmp_path, protocol, port):
     assert sign_in("outsider", os.environ["USER_PASS"])[1] == 401
     assert sign_in("analyst", secrets.token_urlsafe(20))[1] == 401
     with app.app_context():
-        users = get_db().execute("SELECT identity FROM users WHERE username='analyst'").fetchall()
+        users = get_db().execute("SELECT id, identity FROM users WHERE username='analyst'").fetchall()
         assert len(users) == 1
         assert UUID(users[0]["identity"].split(":")[-1])
+        user_id = users[0]["id"]
+    access_path = f"/admin/users/{user_id}/access"
+    for action in ("disable", "enable"):
+        assert admin.post(access_path, data={"action": action, "csrf_token": token(admin.get("/admin/users/"))}).status_code == 302
+        assert client.get("/").status_code == 302
+        client, status = sign_in("EXAMPLE\\analyst", os.environ["USER_PASS"])
+        assert status == (401 if action == "disable" else 302)
     # Removing the fixture CA must revoke the session and reject the untrusted certificate.
     changed = admin.post(page, data={**form, "ca": "", "csrf_token": token(admin.get(page))})
     assert changed.status_code == 302

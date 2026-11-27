@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% block title %}Пользователи и сеансы{% endblock %}
+{% block content %}
+<a href="{{ url_for('admin.index') }}">← Администрирование</a>
+<h1>Пользователи и сеансы</h1>
+<section class="panel">
+<form class="actions" action="{{ url_for('admin.users') }}" method="get">
+  <label>Имя или логин<input type="search" maxlength="256" name="q" value="{{ query }}"></label>
+  <label><input type="checkbox" name="active" value="1" {{ 'checked' if active }}> Только с активными сеансами</label>
+  <button type="submit">Найти</button>
+  {% if query or active %}<a href="{{ url_for('admin.users') }}">Сбросить</a>{% endif %}
+</form>
+<p class="muted">Пользователи каталогов появляются после входа. Отключение доступа завершает их сеансы в IS Manager.</p>
+{% if users %}
+<table><thead><tr><th scope="col">Пользователь</th><th scope="col">Источник</th><th scope="col">Роль и защита</th><th scope="col">Сеансы</th><th scope="col">Действия</th></tr></thead>
+<tbody>{% for user in users %}
+<tr>
+  <td><strong>{{ user.display_name }}</strong>{% if user.username != user.display_name %}<br>{{ user.username }}{% endif %}</td>
+  <td>{{ 'Локальная учётная запись' if user.local else user.directory or 'Удалённый каталог' }}{% if user.directory and not user.directory_enabled %}<br><small>Подключение отключено</small>{% endif %}</td>
+  <td>{{ 'Администратор' if user.admin else 'Пользователь' }}{% if user.disabled %}<br><strong>Доступ отключён</strong>{% endif %}
+  <br><small>{{ '2FA включена' if user.has_totp else '2FA выключена' }}</small></td>
+  <td>{{ user.sessions }}</td>
+  <td>
+    {% if user.sessions %}
+    <form method="post" action="{{ url_for('admin.revoke',user_id=user.id,q=query or none,active=1 if active else none,before=before) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="secondary" data-confirm="Завершить все сеансы {{ user.username }}?">Завершить сеансы</button>
+    </form>
+    {% endif %}
+    {% if not user.local and user.id != g.user.id %}
+    <form method="post" action="{{ url_for('admin.user_access',user_id=user.id,q=query or none,active=1 if active else none,before=before) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="secondary" type="submit" name="action" value="{{ 'enable' if user.disabled else 'disable' }}"
+              {% if not user.disabled %}data-confirm="Отключить доступ {{ user.username }} и завершить все сеансы?"{% endif %}>
+        {{ 'Включить доступ' if user.disabled else 'Отключить доступ' }}
+      </button>
+    </form>
+    {% endif %}
+  </td>
+</tr>
+{% endfor %}</tbody></table>
+{% else %}<p role="status">Пользователи не найдены.</p>{% endif %}
+<nav class="actions" aria-label="Страницы списка">
+  {% if before %}<a href="{{ url_for('admin.users',q=query or none,active=1 if active else none) }}">К началу списка</a>{% endif %}
+  {% if more %}<a href="{{ url_for('admin.users',q=query or none,active=1 if active else none,before=users[-1].id) }}">Следующие 50</a>{% endif %}
+</nav>
+</section>
+{% endblock %}

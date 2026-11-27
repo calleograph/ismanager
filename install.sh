@@ -6,9 +6,7 @@ target=/opt/ismanager
 explicit_dir=0
 ref=""
 name="${COMPOSE_PROJECT_NAME:-ismanager}"
-port="${PORT:-18443}"
-address="${BIND_ADDRESS:-127.0.0.1}"
-public_host="${PUBLIC_HOST:-localhost}"
+network_args=()
 operator_only=0
 no_operator=0
 shared=0
@@ -17,13 +15,11 @@ while (($#)); do
     --dir) explicit_dir=1; target="$2"; shift 2;;
     --ref) ref="$2"; shift 2;;
     --name) name="$2"; shift 2;;
-    --port) port="$2"; shift 2;;
-    --bind) address="$2"; shift 2;;
-    --host) public_host="$2"; shift 2;;
+    --access|--port|--bind|--host|--trusted-proxy) network_args+=("$1" "${2:?Укажите значение $1}"); shift 2;;
     --shared-host) shared=1; shift;;
     --operator) operator_only=1; shift;;
     --no-operator) no_operator=1; shift;;
-    --help) echo "install.sh [--dir PATH] [--ref TAG] [--shared-host] [--name NAME] [--port PORT] [--bind IP] [--host DNS] [--no-operator | --operator]"; exit 0;;
+    --help) echo "install.sh [--dir PATH] [--ref TAG] [--shared-host] [--name NAME] [--access http|proxy|https] [--port PORT] [--bind IPv4] [--host HOST] [--trusted-proxy IP[,IP]] [--no-operator | --operator]"; exit 0;;
     *) echo "Неизвестный параметр: $1" >&2; exit 2;;
   esac
 done
@@ -81,37 +77,43 @@ if [[ -n "$ref" && "$(git rev-parse HEAD)" != "$(git rev-parse --verify "$ref^{c
   trap - EXIT
   updated=1
 fi
+# Old release tags keep their own installation logic and TLS-only settings.
+if [[ ! -f scripts/network_config.py ]]; then
+  for ((i=0; i<${#network_args[@]}; i+=2)); do
+    if [[ "${network_args[i]}" == --access || "${network_args[i]}" == --trusted-proxy ]]; then
+      echo "Этот релиз поддерживает только прямой HTTPS. Сначала обновите IS Manager." >&2; exit 2
+    fi
+  done
+  legacy=(--name "$name" "${network_args[@]}")
+  (( !shared )) || legacy+=(--shared-host)
+  (( !operator_only )) || legacy+=(--operator)
+  (( !no_operator )) || legacy+=(--no-operator)
+  exec bash ./install.sh "${legacy[@]}"
+fi
+existing_env=1
 if [[ ! -f .env ]]; then
-  [[ "$name" =~ ^[a-z0-9][a-z0-9_-]*$ && "$port" =~ ^[0-9]{1,5}$ && "$public_host" =~ ^[a-zA-Z0-9.-]+$ ]] || { echo "Проверьте имя, порт и DNS."; exit 2; }
-  python3 - "$address" "$port" <<'PY'
-import ipaddress, socket, sys, shutil
-ipaddress.IPv4Address(sys.argv[1])
-assert 1 <= int(sys.argv[2]) <= 65535, "Недопустимый порт"
-with socket.socket() as sock:
-    sock.bind((sys.argv[1], int(sys.argv[2])))
-print(f"Свободно на разделе установки: {shutil.disk_usage('.').free // 2**30} ГиБ.")
-PY
+  existing_env=0
+  [[ "$name" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || { echo "Проверьте имя проекта Compose." >&2; exit 2; }
   if docker volume inspect "${name}_data" >/dev/null 2>&1 || [[ -n "$(docker ps -aq --filter "label=com.docker.compose.project=$name")" ]]; then
     echo "Имя проекта или том уже заняты. Используйте другой --name либо рабочий каталог прежней установки." >&2; exit 1
   fi
-  tmp=$(mktemp ./.env.XXXXXX)
-  trap 'rm -f "$tmp"' EXIT
-  cat >"$tmp" <<EOF
-COMPOSE_PROJECT_NAME=$name
-SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-PORT=$port
-BIND_ADDRESS=$address
-PUBLIC_HOST=$public_host
-DATA_VOLUME=${name}_data
-ASR_DEVICE=cpu
-EOF
-  ln "$tmp" .env
-  rm "$tmp"
-  trap - EXIT
+  defaults=()
+  [[ -z "${ACCESS_MODE:-}" ]] || defaults+=(--access "$ACCESS_MODE")
+  [[ -z "${BIND_ADDRESS:-}" ]] || defaults+=(--bind "$BIND_ADDRESS")
+  [[ -z "${PORT:-}" ]] || defaults+=(--port "$PORT")
+  [[ -z "${PUBLIC_HOST:-}" ]] || defaults+=(--host "$PUBLIC_HOST")
+  [[ -z "${TRUSTED_PROXY_IPS:-}" ]] || defaults+=(--trusted-proxy "$TRUSTED_PROXY_IPS")
+  python3 -m scripts.network_config --initialize "$name" "${defaults[@]}" "${network_args[@]}"
 fi
 mkdir -p .runtime/control
 chmod 755 .runtime/control
-if ((! operator_only)); then
+network_only=0
+if ((existing_env && ${#network_args[@]})) && \
+   [[ "$(sed -n 's/^APP_REVISION=//p' .env)" == "$(git rev-parse --short=12 HEAD)" ]] && \
+   [[ -n "$(docker compose ps --status running -q web)" && -n "$(docker compose ps --status running -q worker)" ]]; then
+  network_only=1
+fi
+if ((! operator_only && !network_only)); then
   echo "Сборка контейнеров, загрузка моделей и проверка готовности. При первой установке пароль admin будет выведен в терминал."
   if ((updated)); then
     docker compose exec -T web flask --app app admin-password --if-missing
@@ -119,11 +121,15 @@ if ((! operator_only)); then
     python3 scripts/manage.py install
   fi
 fi
-if ((! no_operator)); then
+if ((existing_env && ${#network_args[@]})); then
+  python3 -m scripts.network_config "${network_args[@]}"
+fi
+if ((! no_operator && (!network_only || operator_only || updated))); then
   python3 scripts/install_operator.py
 fi
 python3 - <<'PY'
 from scripts.manage import settings
-cfg=settings()
-print(f"IS Manager · https://{cfg['PUBLIC_HOST']}:{cfg['PORT']}/")
+from app.network import public_url
+cfg = settings()
+print("IS Manager · " + public_url(cfg.get("ACCESS_MODE", "https"), cfg["PUBLIC_HOST"], cfg["PORT"]))
 PY

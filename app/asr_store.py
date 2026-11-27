@@ -1,4 +1,6 @@
 """Shared SQLite queue for uploaded recordings."""
+import json
+import time
 from pathlib import Path
 
 
@@ -25,6 +27,16 @@ def init_db(db):
 
 def source_path(data_dir, job_id):
     return Path(data_dir) / "media" / job_id
+
+
+def model_status(data_dir):
+    try:
+        state = json.loads((Path(data_dir) / "asr-status.json").read_text())
+        if 0 <= time.time() - state["time"] < 180 and isinstance(state["label"], str):
+            return state["label"]
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return "Нет связи с обработчиком. Загрузка в очередь доступна."
 
 
 def claim(db):
