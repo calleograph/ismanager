@@ -44,22 +44,23 @@ def cursor(name):
 
 
 def entries(event, user, limit, before=None, after=None):
+    query = ""
     conditions = []
     values = []
+    if user:
+        query = "WITH matches AS (SELECT id FROM users WHERE instr(casefold(username || ' ' || display_name), ?) > 0) "
+        values.append(user.casefold())
+        conditions.append("(a.actor IN matches OR a.target_user IN matches)")
     if event:
         conditions.append("a.event=?")
         values.append(event)
-    if user:
-        conditions.append("""(instr(casefold(coalesce(actor.username,'') || ' ' || coalesce(actor.display_name,'')), ?) > 0
-                        OR instr(casefold(coalesce(target.username,'') || ' ' || coalesce(target.display_name,'')), ?) > 0)""")
-        values.extend([user.casefold()] * 2)
     if before:
         conditions.append("a.id < ?")
         values.append(before)
     if after:
         conditions.append("a.id > ?")
         values.append(after)
-    query = """SELECT a.id,a.time,a.event,actor.username AS actor,target.username AS target
+    query += """SELECT a.id,a.time,a.event,actor.username AS actor,target.username AS target
         FROM audit a LEFT JOIN users actor ON a.actor=actor.id LEFT JOIN users target ON a.target_user=target.id"""
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
@@ -77,6 +78,8 @@ def index():
     if after:
         rows.reverse()
     choices = [r[0] for r in get_db().execute("SELECT DISTINCT event FROM audit")]
+    if event and event not in choices:
+        choices.append(event)
     return render_template("journal.html", entries=rows, event=event, user=user,
                            choices=sorted(choices, key=title), filtered_page=bool(before or after),
                            newer=(len(records) > 50 if after else bool(before)),

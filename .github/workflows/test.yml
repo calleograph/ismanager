@@ -15,14 +15,17 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - run: sudo apt-get update -qq && sudo apt-get install -y tesseract-ocr-rus tesseract-ocr-eng poppler-utils
+      - name: Install Ubuntu OCR packages
+        run: |
+          sudo apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=- -o Acquire::Retries=3 update -qq
+          sudo apt-get install -y tesseract-ocr-rus tesseract-ocr-eng poppler-utils
       - run: pip install -r requirements.txt pytest playwright
       - run: python -m app.privacy.fetch_models "$PRIVACY_NLP_DIR"
       - run: python scripts/manage.py --help && bash -n install.sh && node --test tests/passgen.test.cjs
       - run: python -m pytest -q tests
       - run: PYTHON=$(command -v python) tests/ldap/run.sh
       - run: PYTHON=$(command -v python) tests/active_directory/run.sh
-      - run: python -m playwright install --with-deps chromium && python -m tests.live_web
+      - run: CHROMIUM_PATH="$(command -v google-chrome)" python -m tests.live_web
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -55,7 +58,7 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/network-test"
           "$RUNNER_TEMP/network-test/bin/pip" install playwright
-          "$RUNNER_TEMP/network-test/bin/python" -m playwright install --with-deps chromium
+          export CHROMIUM_PATH="$(command -v google-chrome)"
           web=$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q web)")
           worker=$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q worker)")
           "$RUNNER_TEMP/network-test/bin/python" -m tests.live_network "$web" "$worker"

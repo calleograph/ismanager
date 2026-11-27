@@ -6,12 +6,12 @@
 <section class="panel">
   <form method="get" action="{{ url_for('admin.journal') }}">
     <div class="form-grid">
-      <label>Событие
-        <select name="event">
+      <div><label for="audit-event">Событие</label>
+        <select id="audit-event" name="event">
           <option value="">Все события</option>
           {% for code in choices %}<option value="{{ code }}" {{ 'selected' if code == event }}>{{ code|audit_event }}</option>{% endfor %}
         </select>
-      </label>
+      </div>
       <label>Пользователь
         <input type="search" name="user" maxlength="256" value="{{ user }}" placeholder="Имя или логин">
       </label>
