@@ -77,7 +77,9 @@ def index():
     profiles = db.execute("SELECT id,name,enabled FROM directories ORDER BY coalesce(json_extract(config,'$.priority'),100),id").fetchall()
     counts = db.execute("""SELECT (SELECT COUNT(*) FROM users) AS users,
         (SELECT COUNT(*) FROM sessions WHERE expires>unixepoch()) AS sessions,
-        (SELECT COUNT(*) FROM transcripts WHERE status='queued') AS queued""").fetchone()
+        (SELECT COUNT(*) FROM transcripts WHERE status='queued') +
+        (SELECT COUNT(*) FROM watch_files f JOIN watch_rules r ON r.id=f.rule_id
+         WHERE r.enabled AND f.state='queued') AS queued""").fetchone()
     events = db.execute("""SELECT a.time,a.event,u.username,t.username AS target FROM audit a
         LEFT JOIN users u ON u.id=a.actor LEFT JOIN users t ON t.id=a.target_user
         ORDER BY a.id DESC LIMIT 25""").fetchall()

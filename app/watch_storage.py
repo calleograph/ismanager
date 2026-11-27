@@ -200,7 +200,7 @@ class _Local:
         try:
             info = os.fstat(recovery_fd)
             if info.st_uid != os.geteuid() or info.st_mode & 0o077:
-                raise PermissionError("Требуется закрытый каталог восстановления IS Manager.")
+                raise SourceRetainedError("TXT готов. Исходник сохранён: каталог восстановления не является закрытым.")
             try:
                 claimed.stat(saved)
             except FileNotFoundError:
@@ -251,7 +251,8 @@ def _smb_errors():
         status = getattr(error, "ntstatus", None) or getattr(error, "status", None)
         number = {
             NtStatus.STATUS_ACCESS_DENIED: errno.EACCES, NtStatus.STATUS_OBJECT_NAME_COLLISION: errno.EEXIST,
-            NtStatus.STATUS_SHARING_VIOLATION: errno.EBUSY,
+            NtStatus.STATUS_SHARING_VIOLATION: errno.EBUSY, NtStatus.STATUS_CANNOT_DELETE: errno.EPERM,
+            NtStatus.STATUS_PRIVILEGE_NOT_HELD: errno.EACCES,
             NtStatus.STATUS_OBJECT_NAME_NOT_FOUND: errno.ENOENT, NtStatus.STATUS_OBJECT_PATH_NOT_FOUND: errno.ENOENT,
         }.get(status, getattr(error, "errno", None) or errno.EIO)
         raise OSError(number, "SMB: операция с каталогом не выполнена.") from None
@@ -491,7 +492,7 @@ class Directory:
         try:
             return self._io.delete_source(snap, sha256)
         except OSError as error:
-            if error.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+            if error.errno in (errno.EACCES, errno.EPERM, errno.EROFS, errno.ENOTDIR, errno.ELOOP):
                 raise SourceRetainedError("TXT готов. Исходник сохранён: недостаточно прав для безопасного удаления.") from None
             if error.errno == errno.EBUSY:
                 raise SourceChangedError("Запись ещё используется. Исходник сохранён.") from None

@@ -220,3 +220,15 @@ def test_endpoint_restriction_applies_before_smb_connect(monkeypatch):
     with pytest.raises(PermissionError):
         smbclient.register_session("other.test", username="user", password="test",
                                    connection_cache=ws._ServerConnections("allowed.test", 445))
+
+
+def test_public_recovery_directory_retains_source(tmp_path):
+    (tmp_path / "t.wav").write_bytes(b"x")
+    quarantine = tmp_path / "IS Manager - recovery"
+    quarantine.mkdir()
+    quarantine.chmod(0o777)
+    with ws.open_storage({"kind":"local","path":""}, "", tmp_path) as store:
+        snap = store.stat("t.wav")
+        with pytest.raises(ws.SourceRetainedError):
+            store.delete_source(snap, digest(b"x"))
+        assert store.stat("t.wav") == snap

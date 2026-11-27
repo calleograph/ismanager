@@ -246,6 +246,25 @@ class FolderWatchTests(unittest.TestCase):
         self.assertEqual(len(list((self.root / "Архив").glob("*.txt"))), 2)
         self.assertEqual(set(self.transcribed), {"один", "два"})
 
+    def test_external_symlink_does_not_block_other_missing_texts(self):
+        self.recording.write_text("первый")
+        (self.source / "Я.wav").write_text("второй")
+        self.scan()
+        self.scan()
+        self.drain()
+        external = self.data / "личный.txt"
+        external.write_text("чужой")
+        self.txt.unlink()
+        self.txt.symlink_to(external)
+        other = self.output / "Я.txt"
+        other.unlink()
+        self.scan()
+        self.drain()
+        self.assertTrue(self.txt.is_symlink())
+        self.assertEqual(external.read_text(), "чужой")
+        self.assertIn("второй", other.read_text())
+        self.assertEqual(self.item()["state"], "conflict")
+
     def test_identical_copies_use_one_inference_after_authorized_read(self):
         (self.source / "Другая.wav").write_text("тот же файл")
         self.recording.write_text("тот же файл")

@@ -109,6 +109,7 @@ def test_processing_state_retry_and_edit_guards(setup):
     assert post(route, action="scan").status_code == 302
     assert post(route, action="retry", file_id=file_id).status_code == 302
     assert post(route, action="retry", file_id=file_id).status_code == 400
+    assert "Записей в очереди — 1" in client.get("/admin/").get_data(as_text=True)
     with app.app_context():
         db = get_db()
         assert db.execute("SELECT last_scan FROM watch_rules WHERE id=?", (rule_id,)).fetchone()[0] == 0

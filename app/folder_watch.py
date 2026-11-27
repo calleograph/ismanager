@@ -14,6 +14,7 @@ INTERVAL = 15
 RETRY_DELAY = 30
 MAX_BYTES = 512 * 1024**2
 DEFAULT_FOLDER = "Тексты IS Manager"
+BLOCKED_OUTPUT = "Имя TXT занято другим объектом. Переименуйте его для записи результата."
 
 
 def signature(snap):
@@ -145,7 +146,7 @@ def observe(db, rule, snapshots, now, interval):
 
 
 def check_outputs(db, rule, seen, secret, root, now):
-    items = db.execute("""SELECT id,state,name,stamp,output_stamp,published_sha,result_stamp,output_name
+    items = db.execute("""SELECT id,state,name,stamp,output_stamp,published_sha,result_stamp,output_name,error
                           FROM watch_files WHERE rule_id=? AND state IN ('done','existing','conflict')
                           ORDER BY id""", (rule["id"],)).fetchall()
     if not items:
@@ -156,6 +157,12 @@ def check_outputs(db, rule, seen, secret, root, now):
                 output = destination.stat(item["output_name"])
             except FileNotFoundError:
                 output = None
+            except ValueError:
+                if item["state"] != "conflict" or item["error"] != BLOCKED_OUTPUT:
+                    change(db, item, now, state="conflict", remove_after=0, error=BLOCKED_OUTPUT)
+                continue
+            except PermissionError:
+                continue
             if output is None or output.size == 0:
                 # Restore the exact saved TXT even after configured source removal.
                 if item["result_stamp"] == item["stamp"]:
@@ -171,6 +178,8 @@ def check_outputs(db, rule, seen, secret, root, now):
                     unchanged = digest(destination.read_text(item["output_name"])) == item["published_sha"]
                 except (UnicodeError, ValueError):
                     unchanged = False
+                except PermissionError:
+                    continue
                 if not unchanged:
                     change(db, item, now, state="conflict",
                            error="TXT изменён вне IS Manager. Для восстановления переименуйте или удалите его.")
@@ -241,8 +250,16 @@ def mark_changed(db, item, now):
 def stage(db, item, rule, data_dir, engine, secret, root, now):
     from . import worker
 
+    blocked = False
     with storage(db, rule, secret, root, output=True) as destination:
-        existing = stat_or_none(destination, item["output_name"])
+        try:
+            existing = stat_or_none(destination, item["output_name"])
+        except ValueError:
+            if not item["replaced"]:
+                change(db, item, now, state="conflict", remove_after=0, error=BLOCKED_OUTPUT)
+                return
+            existing = None
+            blocked = True
     if existing and existing.size and not item["published_sha"] and not item["replaced"]:
         change(db, item, now, state="existing", output_stamp=signature(existing),
                remove_after=0, error="TXT с таким именем уже существует.")
@@ -271,7 +288,7 @@ def stage(db, item, rule, data_dir, engine, secret, root, now):
             timed = worker.transcribe(scratch, engine, progress, timed=True)
         result = dict(state="publishing", result_stamp=item["stamp"], source_sha=sha, timed_text=timed,
                       retry_at=0, error="")
-        if existing and existing.size and not item["published_sha"] and item["replaced"]:
+        if blocked or (existing and existing.size and not item["published_sha"] and item["replaced"]):
             reserve_alternate(db, item, rule, now, sha, **result)
         else:
             change(db, item, now, **result)
@@ -290,7 +307,10 @@ def publish(db, item, rule, secret, root, now):
                 return
             name = item["output_name"]
             try:
-                before = stat_or_none(destination, name)
+                try:
+                    before = stat_or_none(destination, name)
+                except ValueError:
+                    raise FileExistsError(BLOCKED_OUTPUT) from None
                 previous = digest("") if before is not None and before.size == 0 else item["published_sha"] or None
                 destination.publish_text(name, item["timed_text"], previous_sha256=previous)
             except FileExistsError:
