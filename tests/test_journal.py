@@ -59,3 +59,17 @@ def test_audit_filters_cursor_export_and_access(tmp_path):
     assert ids == sorted(set(ids), reverse=True)
     for value in ("  +sample", "\ttext", "\ntext", "@name", "＝sample", "-x"):
         assert journal.excel_cell(value) == "'" + value
+
+
+def test_exact_account_filter_survives_csv_and_same_login(tmp_path):
+    app = create_app(dict(TESTING=True, DATA_DIR=tmp_path, SECRET_KEY=secrets.token_hex(32)))
+    client, _ = first_login(app)
+    with app.app_context():
+        db = get_db()
+        ids = [db.execute("INSERT INTO users(identity,username,display_name,admin) VALUES(?, 'sam','Sam',0)",
+                          (f"ldap:{n}:sam",)).lastrowid for n in (1,2)]
+        db.executemany("INSERT INTO audit(actor,event) VALUES(?,?)", zip(ids,("user.enabled","user.disabled")))
+        db.commit()
+    assert f"account={ids[0]}" in client.get("/admin/users/?q=sam").text
+    exact = client.get(f"/admin/journal/export.csv?account={ids[0]}").get_data(as_text=True)
+    assert "user.enabled" in exact and "user.disabled" not in exact

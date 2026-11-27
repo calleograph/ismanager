@@ -193,3 +193,39 @@ def test_redaction_destinations_and_physical_cycles(setup, storage_kind):
     assert post(one.location, action="retry", file_id=file_id).status_code == 302
     with app.app_context():
         assert tuple(get_db().execute("SELECT state,recoveries FROM watch_files WHERE id=?", (file_id,)).fetchone()) == ("queued", 0)
+
+
+def test_large_resource_lists_and_saved_selections(setup):
+    app, client, post = setup
+    with app.app_context():
+        db = get_db()
+        db.executemany("INSERT INTO watch_resources(kind,name,path) VALUES('local',?,?)",
+                       ((f"Папка {n:03}", f"folder/{n}") for n in range(124)))
+        pick = db.execute("SELECT id FROM watch_resources WHERE name='Папка 123'").fetchone()[0]
+        db.commit()
+    assert len(client.get("/admin/storage/options").json["items"]) == 50
+    assert client.get("/admin/storage/options?q=ПАПКА+123").json["items"] == [{"id":pick, "name":"Папка 123"}]
+    page = client.get("/admin/storage/?page=3").text
+    assert "Папка 123" in page and "Папка 000" not in page
+    rule = post("/admin/watches/new", name="Выбор удалённого по списку ресурса", input_resource=pick)
+    assert rule.status_code == 302 and "Папка 123" in client.get(rule.location).text
+
+
+def test_old_watch_failure_can_be_found_and_retried(setup):
+    app, client, post = setup
+    res = post("/admin/storage/new", name="Источник", kind="local", path="incoming")
+    route = post("/admin/watches/new", name="Правило", input_resource=res.location.rsplit("/",1)[1], enabled="on").location
+    rule_id = int(route.rsplit("/",1)[1])
+    with app.app_context():
+        db = get_db()
+        db.executemany("""INSERT INTO watch_files(rule_id,name,stamp,state,seen_since,updated,output_name,output_key)
+                       VALUES(?,?,'snapshot',?,1,?,?,?)""",
+                       ((rule_id, f"audio{n:03}.wav", "failed" if n==0 else "done", n+1, f"result{n}.txt", str(n)) for n in range(103)))
+        failed = db.execute("SELECT id FROM watch_files WHERE state='failed'").fetchone()[0]
+        db.commit()
+    assert "audio000.wav" not in client.get(route).text
+    filtered = route + "?file_q=AUDIO000&file_state=failed"
+    assert "audio000.wav" in client.get(filtered).text
+    retried = post(filtered, action="retry", file_id=failed)
+    assert retried.status_code == 302 and "file_state=failed" in retried.location
+    assert "Файлы не найдены" in client.get(retried.location).text

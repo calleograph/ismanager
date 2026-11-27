@@ -1,0 +1,29 @@
+{% set operator=maintenance.operator %}{% set report=maintenance.report %}
+{% set enabled=operator in ('ready','busy','legacy') %}
+<section class="panel admin-maintenance" id="maintenance" data-url="{{ url_for('admin.maintenance_status') }}" data-id="{{ report.id }}" data-state="{{ report.state }}" data-operator="{{ operator }}" data-version="{{ maintenance.installed }}" data-health="{{ url_for('health') }}">
+  <div class="row"><h2>{{ icon('server') }} Обновления и резервные копии</h2>
+    <span class="admin-version">Установлена <b data-installed>{{ maintenance.installed }}</b> · Последний релиз <b data-release>{{ maintenance.release.version or 'не проверен' }}</b> <a data-release-link{% if maintenance.release.url %} href="{{ maintenance.release.url }}"{% else %} hidden{% endif %}>Описание выпуска</a></span></div>
+  {% if enabled %}
+  <form class="actions" method="post" action="{{ url_for('admin.maintenance') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <noscript><input type="hidden" name="native_confirm" value="1"><label class="field"><input type="checkbox" name="allow_stop" value="1" required> Подтверждаю временную остановку сервиса для обновления, копирования или отката</label></noscript>
+    {% for key,label,confirm in [('check','Проверить',''),('update','Обновить','Создать резервную копию и установить последний релиз? Во время переключения сервис будет недоступен.'),('backup','Создать копию','Приостановить сервисы и создать резервную копию данных?'),('rollback','Откатить версию','Вернуться к предыдущей установленной версии? Сервис временно остановится.')] %}
+    <button name="operation" value="{{ key }}"{% if key=='check' %} formnovalidate{% endif %}{% if key!='update' %} class="secondary"{% endif %}{% if operator=='busy' or report.state=='running' %} disabled{% endif %}{% if confirm %} data-confirm="{{ confirm }}"{% endif %}>{{ label }}</button>
+    {% endfor %}
+  </form>
+  {% endif %}
+  <p data-message role="status">{{ report.message or ('Помощник выполняет команду.' if operator=='busy' else '') }}</p>
+  <p data-connection role="status" hidden></p>
+  <progress data-running aria-label="Выполнение команды"{% if operator!='busy' and report.state!='running' %} hidden{% endif %}></progress>
+  <details data-history{% if not report.events %} hidden{% endif %}><summary>Ход операции</summary>
+    <ol>{% for event in report.events %}<li>{{ event.message }}</li>{% endfor %}</ol></details>
+  <a href="{{ url_for('admin.index', _anchor='maintenance') }}" data-open-version hidden>Открыть новую версию</a>
+  {% if operator=='legacy' %}<p>Подключён помощник предыдущей версии. Для точной индикации занятости выполните <code>./install.sh --operator</code> в каталоге установки.</p>{% endif %}
+  {% if not enabled %}
+  <p>{{ 'Веб-управление отключено при установке.' if operator=='disabled' else 'Помощник веб-управления не подключён.' }}</p>
+  <details><summary>Показать команды для сервера</summary><pre>python3 scripts/manage.py check
+python3 scripts/manage.py update
+python3 scripts/manage.py backup</pre>
+    <p>Чтобы включить управление из браузера, выполните <code>./install.sh --operator</code> в каталоге установки.</p></details>
+  {% endif %}
+  <noscript><a href="{{ url_for('admin.index',_anchor='maintenance') }}">Показать актуальное состояние</a></noscript>
+</section>

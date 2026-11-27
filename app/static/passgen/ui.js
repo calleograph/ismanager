@@ -11,6 +11,8 @@
   const more = byId('pass-more');
   const all = byId('pass-copy-all');
   const manual = byId('pass-manual');
+  const settings = byId('pass-settings');
+  const narrow = matchMedia('(max-width:820px)');
   const tabs = [...form.querySelectorAll('[role=tab]')];
   const labels = {
     custom: ['Пароли из вашей фразы', 'Создать из моей фразы'],
@@ -54,12 +56,19 @@
     for (const range of form.querySelectorAll('[type=range]')) {
       form.querySelector('output[for="' + range.id + '"]').value = range.value;
     }
-    submit.disabled = more.disabled = mode === 'custom' && Boolean(message);
-    empty.textContent = submit.disabled ? message : 'Нажмите «' + labels[mode][1] + '», чтобы получить варианты.';
+    let issue = mode === 'custom' ? message : '';
+    if (mode === 'random') {
+      if (![fields.upper, fields.lower, fields.digits, fields.special].some(control => control.checked))
+        issue = 'Выберите хотя бы один набор символов.';
+    }
+    byId('pass-error').textContent = mode === 'custom' ? '' : issue;
+    submit.disabled = more.disabled = Boolean(issue);
+    empty.textContent = submit.disabled ? issue : 'Нажмите «' + labels[mode][1] + '», чтобы получить варианты.';
   }
   function setMode(mode) {
     clear();
     fields.mode.value = mode;
+    if (!narrow.matches || mode === 'custom') settings.open = true;
     tabs.forEach(tab => {
       const active = tab.dataset.mode === mode;
       tab.setAttribute('aria-selected', String(active));
@@ -123,7 +132,7 @@
         manual.focus();
         manual.select();
       }
-      status.textContent = (code ? 'Пароль выделен.' : 'Все варианты выделены.') + ' Скопируйте сочетанием клавиш.';
+      status.textContent = (code ? 'Пароль выделен.' : 'Все варианты выделены.') + (matchMedia('(pointer: coarse)').matches ? ' Удерживайте выделение и выберите «Копировать».' : ' Нажмите Ctrl+C или ⌘C.');
     }
   }
   function appendRow(item, index) {
@@ -255,5 +264,7 @@
   motion.addEventListener('change', () => rotate(!motion.matches));
   rotation.addEventListener('click', () => rotate(rotation.getAttribute('aria-pressed') === 'false'));
   nextTip.addEventListener('click', showTip);
+  narrow.addEventListener('change', () => { settings.open = !narrow.matches || fields.mode.value === 'custom'; });
+  settings.open = !narrow.matches;
   setMode(fields.mode.value);
 })();

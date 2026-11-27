@@ -48,11 +48,52 @@
       try { clearMatching(key => key.startsWith(prefix + batch + '.')); } catch { /* optional storage */ }
     }
   };
-  // A restored page must recheck the session before rendering an earlier user's labels.
-  if (location.pathname.startsWith('/redaction/')) {
-    window.addEventListener('pagehide', () => {
-      document.querySelectorAll('[data-local-name]').forEach(label => { label.textContent = ''; });
-    });
-    window.addEventListener('pageshow', event => { if (event.persisted) location.reload(); });
+  if (!location.pathname.startsWith('/redaction/')) return;
+  const shell = document.querySelector('.shell');
+  const notice = document.createElement('p');
+  notice.className = 'notice workspace-check';
+  notice.setAttribute('role', 'status');
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.textContent = 'Проверить доступ';
+  retry.addEventListener('click', verify);
+  let focused;
+  let check;
+  window.addEventListener('pagehide', event => {
+    check?.abort();
+    if (!event.persisted) return;
+    focused = document.activeElement;
+    shell.classList.add('checking-workspace');
+    shell.inert = true;
+    document.querySelectorAll('[data-local-name]').forEach(label => { label.textContent = ''; });
+  });
+  async function verify() {
+    check?.abort();
+    check = new AbortController();
+    const {signal} = check;
+    shell.classList.add('checking-workspace');
+    shell.inert = true;
+    notice.replaceChildren('Проверяем доступ к материалу…');
+    shell.before(notice);
+    const url = document.querySelector('[data-check-url]')?.dataset.checkUrl || location.href;
+    try {
+      const response = await fetch(url, {method:'HEAD', cache:'no-store', signal});
+      if (response.status >= 500 || response.status === 429) throw new Error();
+      if (!response.ok || response.redirected || response.headers.get('X-Workspace-Scope') !== scope) {
+        const target = new URL(url, location.origin);
+        window.removeEventListener('beforeunload', warnOnLeave);
+        location.replace(target.pathname + target.search);
+        return;
+      }
+      const batch = document.querySelector('[data-batch-id]')?.dataset.batchId;
+      if (batch) window.batchFileLabels.display(batch, shell);
+      shell.classList.remove('checking-workspace');
+      shell.inert = false;
+      notice.remove();
+      if (focused?.isConnected) focused.focus({preventScroll:true});
+    } catch {
+      if (!signal.aborted) notice.replaceChildren('Не удалось проверить доступ к материалу. ', retry);
+    }
   }
+  window.addEventListener('pageshow', event => { if (event.persisted) verify(); });
 })();

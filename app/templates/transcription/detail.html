@@ -1,53 +1,61 @@
 {% extends "base.html" %}
 {% block title %}{{ job.filename }} · Транскрибация{% endblock %}
 {% block content %}
-<a href="{{ url_for('.index') }}">← Мои записи</a>
-<h1>{{ job.filename }}</h1>
-<section class="panel">
-  <h2 data-stage>{{ report.stage }}</h2>
-  <div class="asr-console" aria-label="Ход обработки" data-asr-console
-       {% if job.status in ('queued','running') %}data-status-url="{{ url_for('.job_status', job_id=job.id) }}"{% endif %}>
-    <pre data-asr-log role="log">{{ report.events|join('\n') }}</pre>
-    <p data-asr-time>{% if report.elapsed is not none %}Прошло {{ report.elapsed }} с · {% endif %}Обработано {{ report.seconds }} с аудио</p>
-    <p data-asr-resources></p>
-    {% if job.status in ('queued','running') %}
-    <progress max="100" aria-label="Распознавание" {% if report.percent %}value="{{ report.percent }}"{% endif %}></progress>
-    <span data-asr-percent>{{ (report.percent|string + '%') if report.percent else '' }}</span>
-    <p data-asr-connection role="status"></p>
-    <noscript><a href="{{ url_for('.detail', job_id=job.id) }}">Обновить состояние</a></noscript>
-    {% endif %}
-  </div>
-  {% if job.status == 'failed' %}
-    <p role="alert">{{ job.error }}</p>
-    <form action="{{ url_for('.retry', job_id=job.id) }}" method="post">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit">Повторить обработку</button>
-    </form>
-  {% elif job.status == 'done' %}
-    <form action="{{ url_for('.save', job_id=job.id) }}" method="post">
+<div class="asr-detail">
+  <a href="{{ url_for('.index') }}">← Мои записи</a>
+  <h1>{{ job.filename }}</h1>
+  <span id="asr-announcement" role="status" class="asr-announcement"></span>
+  <section class="panel" id="asr-result" data-state="{{ job.status }}">
+    {% if job.status == 'done' %}
+    <div class="asr-heading"><h2>Стенограмма</h2><span>Готово · {{ report.seconds }} с аудио</span></div>
+    <form data-asr-editor data-warn-unsaved action="{{ url_for('.save', job_id=job.id) }}" method="post">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="revision" value="{{ job.revision }}">
-      <label>Стенограмма <textarea id="asr-text" name="body" required rows="14" maxlength="2000000">{{ job.body }}</textarea></label>
-      <button type="submit">Сохранить правки</button>
-      <button type="button" data-copy="#asr-text">Скопировать текст</button>
-      <a href="{{ url_for('.export', job_id=job.id) }}">Скачать TXT</a>
+      <div class="asr-toolbar">
+        <a class="btn" href="{{ url_for('.export', job_id=job.id) }}">{{ icon('download') }} Скачать TXT</a>
+        <button type="button" class="secondary" data-copy="#asr-text">Скопировать текст</button>
+      </div>
+      <label for="asr-text">Текст записи</label>
+      <textarea id="asr-text" name="body" required rows="6" maxlength="2000000">{{ job.body }}</textarea>
+      <button type="submit" class="secondary">Сохранить правки</button>
+      <span class="muted" data-pending-edits role="status"></span>
     </form>
     {% if job.revision %}<details><summary>Исходное распознавание</summary><pre>{{ job.original }}</pre></details>{% endif %}
-  {% endif %}
-</section>
-{% if job.status != 'running' %}
-<details class="panel">
-  <summary>Удалить запись</summary>
-  <p>Исходный файл и стенограмма будут удалены.</p>
-  <form action="{{ url_for('.delete', job_id=job.id) }}" method="post">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit">Удалить окончательно</button>
-  </form>
-</details>
-{% endif %}
+    {% elif job.status == 'failed' %}
+    <h2 data-stage>Не удалось расшифровать запись</h2>
+    <p role="alert">{{ job.error }}</p>
+    <form class="asr-toolbar" action="{{ url_for('.retry', job_id=job.id) }}" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <a class="btn" href="{{ url_for('.index', _anchor='media') }}">Выбрать другую запись</a>
+      <button class="secondary" type="submit">Повторить обработку</button>
+    </form>
+    {% else %}<h2 data-stage>{{ report.stage }}</h2>{% endif %}
+    {% set active = job.status in ('queued','running') %}
+    {% if not active %}<details class="asr-history"><summary>Ход обработки{% if report.elapsed is not none %} · {{ report.elapsed }} с{% endif %}</summary>{% endif %}
+    <div class="asr-console" aria-label="Ход обработки" data-asr-console {% if active %}data-status-url="{{ url_for('.job_status', job_id=job.id) }}"{% endif %}>
+      <pre data-asr-log role="log">{{ report.events|join('\n') }}</pre>
+      <p data-asr-time>{% if report.elapsed is not none %}Прошло {{ report.elapsed }} с · {% endif %}Обработано {{ report.seconds }} с аудио</p>
+      <p data-asr-resources></p>
+      {% if active %}
+      <progress max="100" aria-label="Распознавание" {% if report.percent %}value="{{ report.percent }}"{% endif %}></progress>
+      <span data-asr-percent>{{ (report.percent|string + '%') if report.percent else '' }}</span>
+      <p data-asr-connection role="status"></p>
+      <noscript><a href="{{ url_for('.detail', job_id=job.id) }}">Обновить состояние</a></noscript>
+      {% endif %}
+    </div>
+    {% if not active %}</details>{% endif %}
+  </section>
+  <details class="asr-remove"{% if job.status=='running' %} hidden{% endif %}>
+    <summary>Удалить запись</summary>
+    <p>Исходный файл и стенограмма будут удалены.</p>
+    <form action="{{ url_for('.delete', job_id=job.id) }}" method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit">Удалить окончательно</button>
+    </form>
+  </details>
+</div>
 {% endblock %}
 {% block scripts %}
-{% if job.status in ('queued','running') %}<script defer src="{{ url_for('static', filename='transcription.js') }}"></script>{% endif %}
+<script defer src="{{ url_for('static', filename='transcription.js') }}"></script>
 {% endblock %}
-
 {% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='transcription.css') }}">{% endblock %}

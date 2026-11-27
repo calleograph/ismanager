@@ -38,12 +38,15 @@ def run(tmp):
             page.get_by_label("Новый пароль", exact=True).fill(new)
             page.get_by_label("Повторите новый пароль").fill(new)
             page.get_by_role("button", name="Сохранить пароль").click()
-            page.get_by_role("heading", name="Рабочее пространство").wait_for()
+            page.get_by_role("heading", name="Администрирование", exact=True).wait_for()
             page.get_by_role("button", name="Сменить тему").click()
             assert page.locator("html").get_attribute("data-theme") == "dark"
-            for width in (1366, 390):
+            for width, labels in (
+                (1366, ("Транскрибация", "Обезличивание", "Пароли", "Модели угроз", "Система", "Обзор")),
+                (390, ("Записи", "Обезличить", "Пароли", "Угрозы", "Система", "Обзор")),
+            ):
                 page.set_viewport_size(dict(width=width, height=820))
-                for label in ("Транскрибация", "Обезличивание", "Пароли", "Модели угроз", "Система", "Обзор"):
+                for label in labels:
                     page.get_by_role("navigation", name="Разделы").get_by_role("link", name=label).click()
                     assert page.locator("main h1").is_visible()
                     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1"), label

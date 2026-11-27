@@ -1,48 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Пакет № {{ batch.id }} · Обезличивание{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static',filename='redaction.css') }}">{% endblock %}
 {% block content %}
 <a href="{{ url_for('redaction.index') }}">← Обезличивание</a>
 <h1>Пакет № {{ batch.id }}</h1>
-<section class="panel">
-  <h2>Добавить файлы</h2>
-  <p>Полный профиль Faceless. До {{ limit//1048576 }} МиБ на файл. После отправки можно закрыть страницу. Чтобы продолжить прерванную загрузку, выберите файлы снова. Повторно принятые документы сохраняют свои номера.</p>
+<details class="panel batch-add"{% if not total %} open{% endif %}>
+  <summary>Добавить файлы</summary>
+  <p>До {{ limit//1048576 }} МиБ на файл. Оставьте вкладку открытой до окончания передачи.</p>
   <form id="batch-upload" method="post" action="{{ url_for('redaction.upload_file',batch_id=batch.id) }}" enctype="multipart/form-data" data-batch-id="{{ batch.id }}" data-limit="{{ limit }}" data-formats="{{ formats|join(',') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="nonce" value="{{ nonce }}">
-    <label>Файлы<input type="file" name="file" required></label>
+    <label>Файлы<input type="file" name="file" required accept=".{{ formats|join(',.') }}"></label>
     <button>Добавить в пакет</button>
   </form>
   <details><summary>Поддерживаемые форматы</summary><p>{{ formats|join(', ')|upper }}</p></details>
   <p role="status" id="batch-upload-status"></p><a hidden id="batch-upload-link">Открыть пакет</a>
-</section>
-<section class="panel" id="batch-results" data-pending="{{ counts.get('queued',0)+counts.get('running',0) }}">
-  <h2>Результаты</h2>
-  {% if legacy %}<p class="notice">В этом пакете есть результаты по прежним правилам, в которых могли сохраниться секреты. Для повторной проверки всех документов <a href="{{ url_for('redaction.index') }}">создайте новый пакет</a> и загрузите оригиналы.</p>{% endif %}
-  <p>Имена выбранных файлов видны только в этой вкладке до выхода из учётной записи.</p>
-  <p>Всего {{ total }} · В очереди {{ counts.get('queued',0) }} · Обрабатывается {{ counts.get('running',0) }} · Готово {{ counts.get('done',0) }} · Ошибок {{ counts.get('failed',0) }}</p>
-  {% if counts.get('done') %}<p><a class="button" href="{{ url_for('redaction.batch_archive',batch_id=batch.id) }}">Скачать готовые TXT в ZIP</a></p>{% endif %}
-  {% if files %}
-  <table><thead><tr><th scope="col">Файл</th><th scope="col">Состояние</th><th scope="col">Результат</th></tr></thead>
-    <tbody>{% for item in files %}<tr><td>№ {{ item.ordinal }}{% if item.ext %} · {{ item.ext|upper }}{% endif %}<span data-local-name="{{ item.ordinal }}"></span></td>
-      <td>{{ states[item.state] }}</td><td>
-        {% if item.state=='done' %}<a href="{{ url_for('redaction.batch_download',batch_id=batch.id,ordinal=item.ordinal) }}">Скачать TXT</a> · Замен {{ item.replacements }}
-          {% if item.warnings in (1,3) %}<p>Использован OCR. Проверьте распознавание имён и цифр.</p>{% endif %}
-          {% if item.warnings in (2,3) %}<p>Вложенные изображения Office пропущены. Для их обработки загрузите изображения отдельно.</p>{% endif %}
-        {% elif item.error %}{{ errors.get(item.error,errors.internal) }}{% else %}—{% endif %}
-      </td></tr>{% endfor %}</tbody></table>
-  {% else %}<p>Здесь появятся принятые файлы. В списке и архиве им присваиваются номера в порядке загрузки.</p>{% endif %}
-  {% if last_page>1 %}<nav class="actions" aria-label="Страницы пакета">
-    {% if page>1 %}<a href="{{ url_for('redaction.batch',batch_id=batch.id,page=page-1) }}">Назад</a>{% endif %}
-    <span>{{ page }} из {{ last_page }}</span>
-    {% if page<last_page %}<a href="{{ url_for('redaction.batch',batch_id=batch.id,page=page+1) }}">Далее</a>{% endif %}
-  </nav>{% endif %}
-  {% if not counts.get('running') and not counts.get('queued') %}
-  <details><summary>Удалить пакет</summary>
-    <p>Все результаты этого пакета будут удалены из IS Manager.</p>
-    <form method="post" action="{{ url_for('redaction.delete_batch',batch_id=batch.id) }}" data-delete-batch="{{ batch.id }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="secondary">Подтвердить удаление пакета</button><p role="alert"></p>
-    </form>
-  </details>{% endif %}
-  {% if counts.get('running') or counts.get('queued') %}<a href="{{ url_for('redaction.batch',batch_id=batch.id,page=page) }}">Обновить состояние</a>{% endif %}
-</section>
+</details>
+{% include "redaction/batch_results.html" %}
 {% endblock %}
 {% block scripts %}<script defer src="{{ url_for('static',filename='redaction_batch.js') }}"></script>{% endblock %}

@@ -1,7 +1,7 @@
-{% extends 'base.html' %}
+{% extends 'admin_layout.html' %}
 {% block title %}Журнал доступа и настроек{% endblock %}
-{% block content %}
-<a href="{{ url_for('admin.index') }}">← Администрирование</a>
+{% block admin_content %}
+
 <h1>Журнал доступа и настроек</h1>
 <section class="panel">
   <form method="get" action="{{ url_for('admin.journal') }}">
@@ -12,28 +12,29 @@
           {% for code in choices %}<option value="{{ code }}" {{ 'selected' if code == event }}>{{ code|audit_event }}</option>{% endfor %}
         </select>
       </div>
-      <label>Пользователь
+      {% if selected %}<input type="hidden" name="account" value="{{ account }}"><div><span>Учётная запись</span><strong class="admin-filter-account">{{ selected.username }}</strong></div>
+      {% else %}<label>Пользователь
         <input type="search" name="user" maxlength="256" value="{{ user }}" placeholder="Имя или логин">
-      </label>
+      </label>{% endif %}
     </div>
     <small>Поиск учитывает инициатора и учётную запись, к которой относится событие.</small>
     <div class="actions"><button type="submit">Применить</button>
-      {% if event or user %}<a href="{{ url_for('admin.journal') }}">Сбросить фильтры</a>{% endif %}
+      {% if event or user or account %}<a href="{{ url_for('admin.journal') }}">Сбросить фильтры</a>{% endif %}
     </div>
   </form>
 </section>
 <section class="panel">
-  <div class="row"><h2>События</h2><a class="btn secondary" href="{{ url_for('admin.journal_csv',event=event or none,user=user or none) }}">Скачать CSV</a></div>
+  <div class="row"><h2>События</h2><a class="btn secondary" href="{{ url_for('admin.journal_csv',event=event or none,user=user or none,account=account or none) }}">Скачать CSV</a></div>
   {% if entries %}
-  <table><thead><tr><th scope="col">Время UTC</th><th scope="col">Событие</th><th scope="col">Инициатор</th><th scope="col">Учётная запись</th></tr></thead>
-  <tbody>{% for e in entries %}<tr><td>{{ e.time }}</td><td>{{ e.event|audit_event }}</td><td>{{ e.actor or '—' }}</td><td>{{ e.target or '—' }}</td></tr>{% endfor %}</tbody></table>
+  <table class="admin-records"><thead><tr><th scope="col">Время UTC</th><th scope="col">Событие</th><th scope="col">Инициатор</th><th scope="col">Учётная запись</th></tr></thead>
+  <tbody>{% for e in entries %}<tr><td>{{ e.time }}</td><td data-label="Событие">{{ e.event|audit_event }}</td><td data-label="Инициатор">{{ e.actor or '—' }}</td><td data-label="Учётная запись">{{ e.target or '—' }}</td></tr>{% endfor %}</tbody></table>
   <nav class="actions" aria-label="Страницы журнала">
-    {% if newer %}<a rel="prev" href="{{ url_for('admin.journal',event=event or none,user=user or none,after=entries[0].id) }}">← Новее</a>{% endif %}
-    {% if older %}<a rel="next" href="{{ url_for('admin.journal',event=event or none,user=user or none,before=entries[-1].id) }}">Ранее →</a>{% endif %}
+    {% if newer %}<a rel="prev" href="{{ url_for('admin.journal',event=event or none,user=user or none,account=account or none,after=entries[0].id) }}">← Новее</a>{% endif %}
+    {% if older %}<a rel="next" href="{{ url_for('admin.journal',event=event or none,user=user or none,account=account or none,before=entries[-1].id) }}">Ранее →</a>{% endif %}
   </nav>
   {% else %}
   <p role="status">Событий не найдено.</p>
-  {% if filtered_page %}<a href="{{ url_for('admin.journal',event=event or none,user=user or none) }}">К началу выборки</a>{% endif %}
+  {% if filtered_page %}<a href="{{ url_for('admin.journal',event=event or none,user=user or none,account=account or none) }}">К началу выборки</a>{% endif %}
   {% endif %}
 </section>
 {% endblock %}

@@ -61,3 +61,47 @@ def test_startup_reports_changed_model_download_progress(monkeypatch, capsys):
     monkeypatch.setattr(manage, "compose", Mock(side_effect=[json.dumps(dict(time=t,label=label)) for t,label in readings]))
     manage.report_model_preparation(event, started=5)
     assert capsys.readouterr().out.splitlines() == ["Загружается GigaAM · 16 МиБ"]
+
+
+def test_failed_staged_build_never_stops_live_release(tmp_path, monkeypatch):
+    import pytest
+    monkeypatch.setattr(manage, "STATE", tmp_path)
+    git = Mock(side_effect=["", "old", "new", "aabbcc", "", ""])
+    monkeypatch.setattr(manage, "git", git)
+    monkeypatch.setattr(manage, "build", Mock(side_effect=OSError("build unavailable")))
+    stop = Mock()
+    monkeypatch.setattr(manage, "compose", stop)
+    with pytest.raises(ValueError, match="Прежняя версия продолжает работу"):
+        manage.change_version("v1.0.0")
+    stop.assert_not_called()
+    assert not any(call.args[:1] == ("switch",) for call in git.call_args_list)
+    assert not (tmp_path / "pending.json").exists() and not (tmp_path / "control/maintenance").exists()
+
+
+def test_progress_requires_admin_through_maintenance(tmp_path, monkeypatch):
+    import secrets
+    from app import create_app
+    from test_platform import first_login
+
+    app = create_app(dict(DATA_DIR=tmp_path / "data", SECRET_KEY=secrets.token_hex(32), TESTING=True))
+    monkeypatch.setenv("CONTROL_DIR", str(tmp_path))
+    client, _ = first_login(app)
+    (tmp_path / "maintenance").touch()
+    (tmp_path / "operation.json").write_text(json.dumps(dict(id="one", state="running", message="Сборка образа", events=[])))
+    route = "/admin/maintenance/status"
+    assert app.test_client().get(route).location == "/login"
+    assert client.get(route).json["report"]["message"] == "Сборка образа"
+    response = client.get("/admin/")
+    assert response.status_code == 503 and 'http-equiv="refresh"' not in response.get_data(as_text=True)
+    assert client.post("/admin/maintenance", data={"operation":"check"}).status_code == 503
+
+
+def test_build_uses_staged_files_and_target_tags(tmp_path, monkeypatch):
+    run = Mock()
+    monkeypatch.setattr(manage, "run", run)
+    monkeypatch.setattr(manage, "settings", lambda: {"COMPOSE_PROJECT_NAME":"fixture","TORCH_INDEX_URL":"https://example.invalid/torch"})
+    monkeypatch.setattr(manage.subprocess, "run", Mock(return_value=Mock(returncode=0)))
+    manage.build(tmp_path, "1234")
+    assert len(run.call_args_list) == 2
+    for call, service, file in zip(run.call_args_list, ["worker","web"], ["Dockerfile.worker","Dockerfile"]):
+        assert call.args[-5:] == ("-f", str(tmp_path / file), "-t", "fixture-" + service + ":1234", str(tmp_path))

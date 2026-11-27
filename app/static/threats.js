@@ -1,12 +1,19 @@
 const search = document.getElementById("threat-search");
 search?.addEventListener("input", () => {
   const value = search.value.trim().toLowerCase();
+  let total = 0;
+  let found = 0;
   document.querySelectorAll(".threat-group").forEach((group, index) => {
     const labels = [...group.querySelectorAll("[data-search]")];
     for (const label of labels) label.hidden = !label.dataset.search.includes(value);
-    group.hidden = labels.every(label => label.hidden);
+    const visible = labels.filter(label => !label.hidden).length;
+    total += labels.length;
+    found += visible;
+    group.hidden = visible === 0;
     group.open = Boolean(value && !group.hidden) || index === 0;
   });
+  document.querySelector("#threat-matches").textContent = found ? "Показано угроз: " + found + " из " + total + "." :
+    "Совпадений нет. Измените код или название угрозы.";
 });
 
 document.getElementById("apply-consequences")?.addEventListener("click", () => {
@@ -64,3 +71,31 @@ wizardForm?.addEventListener('keydown', event => {
     wizardForm.requestSubmit(wizardForm.querySelector('button[value=next]'));
   }
 });
+
+// The ordinary POST keeps validation and redirects to the reviewed questionnaire.
+// Only the tab that requested the generation starts the completed download.
+const generateForm = document.getElementById('threat-generate');
+const archiveLink = document.getElementById('threat-zip');
+if (generateForm || archiveLink) {
+  const marker = 'ismanager.threat-download.' + location.pathname;
+  try {
+    const requested = Number(sessionStorage.getItem(marker));
+    sessionStorage.removeItem(marker);
+    if (archiveLink && requested > Date.now() - 300000) archiveLink.click();
+    if (generateForm) {
+      const button = generateForm.querySelector('button');
+      button.textContent = 'Сформировать и скачать ZIP';
+      generateForm.addEventListener('submit', () => {
+        sessionStorage.setItem(marker, String(Date.now()));
+        button.disabled = true;
+        button.textContent = 'Формируем документы…';
+      });
+      window.addEventListener('pageshow', event => {
+        if (event.persisted) {
+          button.disabled = false;
+          button.textContent = 'Сформировать и скачать ZIP';
+        }
+      });
+    }
+  } catch { /* The download link remains available when browser storage is disabled. */ }
+}

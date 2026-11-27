@@ -16,6 +16,8 @@
   const formats = new Set(form.dataset.formats.split(','));
   let counter = 0;
   let busy = false;
+  let refreshTimer;
+  let uploadVersion = 0;
   let address = starting ? null : {id: form.dataset.batchId, url: location.pathname, upload: form.action};
   const labels = window.batchFileLabels;
   if (address) labels?.display(address.id,document);
@@ -69,6 +71,7 @@
     if (!field.files.length) return;
     const files = Array.from(field.files);
     busy = true;
+    uploadVersion++;
     field.disabled = true;
     const button = form.querySelector('button');
     button.disabled = true;
@@ -97,31 +100,59 @@
         labels?.remember(address.id,receipt.ordinal,file.name);
         ready.add(file);
       }
-      location.assign(address.url);
+      if (starting) {
+        location.assign(address.url);
+      } else {
+        field.value = '';
+        status.textContent = 'Все выбранные файлы переданы.';
+      }
     } catch (error) {
       status.textContent = error.message;
     } finally {
       button.disabled = false;
       field.disabled = false;
       busy = false;
+      if (!starting) refresh(true);
     }
   });
 
-  async function refresh() {
+  document.addEventListener('click', event => {
+    if (!event.target.closest('[data-refresh-batch]')) return;
+    event.preventDefault();
+    refresh(true);
+  });
+
+  let refreshVersion = 0;
+  async function refresh(force = false) {
+    const requestNumber = ++refreshVersion;
+    clearTimeout(refreshTimer);
     const panel = document.getElementById('batch-results');
-    if (!panel || !Number(panel.dataset.pending)) return;
-    if (!busy && !document.hidden && !panel.contains(document.activeElement)) {
+    if (!panel || (!force && !Number(panel.dataset.pending))) return;
+    const version = uploadVersion;
+    if (!busy && !document.hidden) {
       try {
-        const res = await fetch(location.href, {credentials:'same-origin', cache:'no-store'});
+        const res = await fetch(location.href, {headers:{'X-IS-Fragment':'batch-results'}, cache:'no-store'});
         if (!res.ok) throw new Error();
         const fresh = new DOMParser().parseFromString(await res.text(),'text/html').getElementById('batch-results');
-        if (fresh) {
-          labels?.display(address.id,fresh);
-          panel.replaceWith(fresh);
+        if (!fresh) throw new Error();
+        if (version !== uploadVersion || requestNumber !== refreshVersion) return;
+        labels?.display(address.id, fresh);
+        const active = document.activeElement;
+        const selected = window.getSelection();
+        if (selected.isCollapsed || !panel.contains(selected.anchorNode)) {
+          if (!panel.isEqualNode(fresh)) {
+            const keepFocus = panel.contains(active);
+            panel.replaceWith(fresh);
+            if (keepFocus) {
+              const same = [...fresh.querySelectorAll('a')].find(link => link.getAttribute('href') === active.getAttribute('href'));
+              (same || fresh.querySelector('h2')).focus({preventScroll:true});
+            }
+          }
+          if (!Number(fresh.dataset.pending)) return;
         }
-      } catch { /* The manual refresh link stays available. */ }
+      } catch { /* Retry on the same page after a temporary network failure. */ }
     }
-    setTimeout(refresh, 5000);
+    if (version === uploadVersion && requestNumber === refreshVersion) refreshTimer = setTimeout(() => refresh(force), 5000);
   }
-  setTimeout(refresh, 5000);
+  refreshTimer = setTimeout(refresh, 5000);
 })();

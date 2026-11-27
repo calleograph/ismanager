@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block head %}{{ super() }}<link rel="stylesheet" href="{{ url_for('static',filename='admin.css') }}">{% endblock %}
+{% block content %}
+<div class="admin-space">
+{% if g.user and g.user.admin and not g.user.must_change %}
+<nav class="admin-nav" aria-label="Разделы администрирования">
+{% for label,endpoint,active in [('Состояние','index',['index']),('Каталоги','directories',['directories','profile']),('Пользователи','users',['users']),('Хранилища','storage',['storage','storage_edit']),('Правила','watches',['watches','watch_edit']),('Журнал','journal',['journal'])] %}
+<a href="{{ url_for('admin.' ~ endpoint) }}"{% if request.endpoint.split('.')[-1] in active %} aria-current="page"{% endif %}>{{ label }}</a>
+{% endfor %}
+</nav>{% endif %}
+{% block admin_content %}{% endblock %}
+</div>
+{% endblock %}
+{% block scripts %}{{ super() }}<script defer src="{{ url_for('static',filename='admin-forms.js') }}"></script>{% endblock %}

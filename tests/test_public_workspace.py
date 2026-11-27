@@ -26,6 +26,9 @@ def test_public_modules_keep_independent_owners(tmp_path):
     batch = alice.post("/redaction/batches", data=dict(nonce=nonce, csrf_token=csrf)).location
     job = alice.post("/transcription/", data=dict(media=(io.BytesIO(b"fixture"), "sample.ogg"), csrf_token=csrf)).location
     assert alice.get(batch).status_code == alice.get(job).status_code == 200
+    batch_link = f'href="{batch}"'
+    assert batch_link in alice.get("/").get_data(as_text=True)
+    assert batch_link not in bob.get("/").get_data(as_text=True)
     assert bob.get(batch).status_code == bob.get(job).status_code == bob.get(job + "/status").status_code == 404
     assert bob.get(batch + "/archive.zip").status_code == 404
     assert bob.post("/redaction/batches", data=dict(nonce=nonce, csrf_token=csrf)).status_code == 400

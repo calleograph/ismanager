@@ -3,6 +3,7 @@ import csv
 import io
 import re
 import unicodedata
+from collections.abc import Iterator
 
 from flask import Response, abort, render_template, request, stream_with_context
 
@@ -49,11 +50,14 @@ def cursor(name):
     return value
 
 
-def entries(event, user, limit, before=None, after=None):
+def entries(event, user, limit, before=None, after=None, account=None):
     query = ""
     conditions = []
-    values = []
-    if user:
+    values: list[str | int] = []
+    if account:
+        conditions.append("(a.actor=? OR a.target_user=?)")
+        values.extend((account, account))
+    elif user:
         query = "WITH matches AS (SELECT id FROM users WHERE instr(casefold(username || ' ' || display_name), ?) > 0) "
         values.append(user.casefold())
         conditions.append("(a.actor IN matches OR a.target_user IN matches)")
@@ -79,14 +83,18 @@ def index():
     before, after = cursor("before"), cursor("after")
     if before and after:
         abort(400)
-    records = entries(event, user, 51, before, after)
+    account = cursor("account")
+    selected = get_db().execute("SELECT username FROM users WHERE id=?", (account,)).fetchone() if account else None
+    if account and not selected:
+        abort(404)
+    records = entries(event, user, 51, before, after, account)
     rows = records[:50]
     if after:
         rows.reverse()
     choices = [r[0] for r in get_db().execute("SELECT DISTINCT event FROM audit")]
     if event and event not in choices:
         choices.append(event)
-    return render_template("journal.html", entries=rows, event=event, user=user,
+    return render_template("journal.html", entries=rows, event=event, user=user, account=account, selected=selected,
                            choices=sorted(choices, key=title), filtered_page=bool(before or after),
                            newer=(len(records) > 50 if after else bool(before)),
                            older=(bool(after) or len(records) > 50))
@@ -102,16 +110,16 @@ def excel_cell(value):
 
 def export():
     event, user = filters()
+    account = cursor("account")
 
-    @stream_with_context
-    def chunks():
+    def chunks() -> Iterator[str]:
         output = io.StringIO(newline="")
         output.write("\ufeff")
         writer = csv.writer(output, delimiter=";", quoting=csv.QUOTE_ALL)
         writer.writerow(("ID", "Время UTC", "Событие", "Код события", "Инициатор", "Учётная запись"))
         yield output.getvalue()
         before = None
-        while rows := entries(event, user, 500, before=before):
+        while rows := entries(event, user, 500, before=before, account=account):
             output.seek(0)
             output.truncate(0)
             for row in rows:
@@ -122,4 +130,5 @@ def export():
             if len(rows) < 500:
                 break
 
-    return Response(chunks(), mimetype="text/csv", headers={"Content-Disposition": 'attachment; filename="ismanager-audit.csv"'})
+    return Response(stream_with_context(chunks()), mimetype="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="ismanager-audit.csv"'})

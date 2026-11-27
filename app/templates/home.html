@@ -1,10 +1,45 @@
-{% extends "base.html" %}{% block content %}
-<header class="pageheading"><h1>Рабочее пространство</h1></header>
-<div class="module-grid">
-{% set descriptions = ['Загрузите запись, отредактируйте стенограмму и сохраните текст.', 'Найдите чувствительные данные в тексте или документе и замените их обозначениями.', 'Создайте стойкий пароль или запоминаемую фразу с нужными параметрами.', 'Заполните анкету системы и подготовьте комплект документов.'] %}
-{% for key,symbol,label,kind in sections %}<a class="module-card {{ key }}" href="{{ url_for(key+'.index') }}"><div class="cardtop"><div class="module-icon">{{ icon(symbol) }}</div><span class="small-arrow">{{ icon('chevron-right') }}</span></div>
-<h2>{{ 'Генератор паролей' if key=='passwords' else label }}</h2><p>{{ descriptions[loop.index0] }}</p></a>{% endfor %}</div>
-{% if not g.user.admin %}<p class="muted">Записи, документы и черновики доступны в этом браузере. Cookie рабочего пространства действует семь дней с последнего посещения.</p>{% endif %}
-{% if recent %}<section class="panel recent"><h2>Последние материалы</h2>
-{% for row in recent %}<a class="history-link" href="{{ url_for('transcription.detail',job_id=row.id) if row.kind=='transcript' else url_for('redaction.show',record_id=row.id) if row.kind=='redaction' else url_for('threats.edit',model_id=row.id,step=1) }}"><span>{{ row.title }}</span><time>{{ row.stamp }} UTC</time></a>{% endfor %}</section>{% endif %}
+{% extends "base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='workspace.css') }}">{% endblock %}
+{% block content %}
+<header class="workspace-heading">
+  <h1>Рабочее пространство</h1>
+  <p>Инструменты информационной безопасности</p>
+</header>
+<div class="workspace-tools">
+  <a class="record-tool" href="{{ url_for('transcription.index') }}">
+    <h2>Транскрибация</h2>
+    <p>Русская речь из аудио и видео в текст</p>
+    <span class="record-action">Открыть записи {{ icon('chevron-right') }}</span>
+  </a>
+  <div class="document-tools">
+    {% for key,symbol,label,description in [
+      ('redaction','shield-check','Обезличивание','Скрыть персональные данные и секреты в тексте или пакете файлов'),
+      ('passwords','key-round','Генератор паролей','Подобрать пароль из слов, фразы или случайных символов'),
+      ('threats','network','Модели угроз','Заполнить анкету системы и собрать комплект документов')] %}
+    <a class="document-tool {{ key }}" href="{{ url_for(key+'.index') }}">
+      <span class="tool-symbol">{{ icon(symbol) }}</span>
+      <div><h2>{{ label }}</h2><p>{{ description }}</p></div>{{ icon('chevron-right') }}
+    </a>
+    {% endfor %}
+  </div>
+</div>
+<section class="material-list" aria-labelledby="materials-heading">
+  <h2 id="materials-heading">Последние материалы</h2>
+  {% if recent %}
+    <ul>
+    {% for row in recent %}
+      {% if row.kind=='transcript' %}{% set href=url_for('transcription.detail',job_id=row.id) %}{% set symbol='play' %}
+      {% elif row.kind=='redaction' %}{% set href=url_for('redaction.show',record_id=row.id) %}{% set symbol='shield-check' %}
+      {% elif row.kind=='batch' %}{% set href=url_for('redaction.batch',batch_id=row.id) %}{% set symbol='scroll-text' %}
+      {% else %}{% set href=url_for('threats.edit',model_id=row.id,step=row.stage) %}{% set symbol='network' %}{% endif %}
+      <li><a href="{{ href }}">{{ icon(symbol) }}<strong>{{ row.title }}</strong>
+        <time datetime="{{ row.stamp|replace(' ','T') }}Z">{{ row.stamp }} UTC</time>{{ icon('chevron-right') }}</a></li>
+    {% endfor %}
+    </ul>
+  {% else %}
+    <div class="empty-materials">{{ icon('history') }}<div><strong>Здесь появятся ваши материалы</strong>
+    <p>Загрузите запись, обработайте документ или начните модель угроз.</p></div></div>
+  {% endif %}
+  {% if not g.user.admin %}<p class="workspace-note">{{ icon('lock') }}<span>Доступ привязан к этому браузеру и сохраняется семь дней с последнего посещения.</span></p>{% endif %}
+</section>
 {% endblock %}

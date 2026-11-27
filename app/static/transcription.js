@@ -57,9 +57,17 @@ if (panel) {
         if (!response.ok) throw new Error();
         const job = await response.json();
         if (job.state === "done" || job.state === "failed") {
-          location.reload();
+          const result = await fetch(location.href, {cache: "no-store"});
+          if (!result.ok) throw new Error();
+          const fresh = new DOMParser().parseFromString(await result.text(), "text/html").querySelector("#asr-result");
+          if (!fresh || !["done", "failed"].includes(fresh.dataset.state)) throw new Error();
+          document.querySelector("#asr-result").replaceWith(fresh);
+          document.querySelector(".asr-remove").hidden = false;
+          document.getElementById("asr-announcement").textContent = job.state === "done" ? "Стенограмма готова." : "Запись не удалось расшифровать.";
+          prepareEditor();
           return;
         }
+        document.querySelector(".asr-remove").hidden = job.state === "running";
         document.querySelector("[data-stage]").textContent = job.stage;
         const events = job.events.join("\n");
         if (log.textContent !== events) log.textContent = events;
@@ -84,3 +92,18 @@ if (panel) {
   };
   poll();
 }
+
+function prepareEditor() {
+  const editor = document.querySelector("[data-asr-editor]");
+  if (!editor) return;
+  const field = editor.elements.body;
+  const pending = editor.querySelector("[data-pending-edits]");
+  function markChanges() {
+    const changed = field.value !== field.defaultValue;
+    editor.querySelector("button[type=submit]").disabled = !changed;
+    pending.textContent = changed ? "Сохраните правки, чтобы они попали в TXT." : "";
+  }
+  field.addEventListener("input", markChanges);
+  markChanges();
+}
+prepareEditor();

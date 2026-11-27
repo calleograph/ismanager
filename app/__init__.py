@@ -81,7 +81,7 @@ def create_app(config=None):
         g.user = None
         if request.endpoint in {"static", "health"}:
             return
-        if (Path(os.getenv("CONTROL_DIR", "/control")) / "maintenance").exists():
+        if request.endpoint != "admin.maintenance_status" and (Path(os.getenv("CONTROL_DIR", "/control")) / "maintenance").exists():
             abort(503, description="Идёт обслуживание IS Manager. Повторите запрос через несколько минут.")
         if "sid" in session:
             g.user = db.get_db().execute(
@@ -92,11 +92,13 @@ def create_app(config=None):
                 auth.clear_login()
         public = request.endpoint == "dashboard" or request.blueprint in {"transcription", "redaction", "passwords", "threats"}
         if request.endpoint and not public and request.endpoint != "auth.login" and g.user is None:
+            auth.remember_admin_page()
             return redirect(url_for("auth.login"))
         if g.user is not None:
             if request.endpoint not in {"auth.login", "auth.account", "auth.logout"} and (
                 g.user["must_change"] or (g.user["admin"] and not g.user["totp"] and db.auth_settings()["admin_totp"])
             ):
+                auth.remember_admin_page()
                 return redirect(url_for("auth.account"))
             if request.blueprint == "admin" and not g.user["admin"]:
                 abort(403)
@@ -131,16 +133,18 @@ def create_app(config=None):
     @app.get("/")
     def dashboard():
         recent = db.get_db().execute("""
-            SELECT 'transcript' AS kind, id, filename AS title, created AS stamp FROM transcripts WHERE owner=?
-            UNION ALL SELECT 'redaction', id, 'Обезличивание №' || id, created FROM redactions WHERE user_id=?
-            UNION ALL SELECT 'threat', id, name, updated FROM threat_models WHERE owner=?
-            ORDER BY stamp DESC LIMIT 6
-        """, (g.user["id"],) * 3).fetchall()
+            SELECT 'transcript' AS kind, id, filename AS title, created AS stamp, NULL AS stage FROM transcripts WHERE owner=?
+            UNION ALL SELECT 'redaction', id, 'Обезличивание №' || id, created, NULL FROM redactions WHERE user_id=?
+            UNION ALL SELECT 'batch', id, 'Пакет № ' || id, created, NULL FROM redaction_batches WHERE owner=?
+            UNION ALL SELECT 'threat', id, name, updated, stage FROM threat_models WHERE owner=?
+            ORDER BY stamp DESC, kind, id DESC LIMIT 6
+        """, (g.user["id"],) * 4).fetchall()
         return render_template("home.html", recent=recent)
 
     @app.errorhandler(HTTPException)
     def error(exc):
-        response = app.make_response((render_template("error.html", error=exc), exc.code))
+        detail = exc.description if exc.description != type(exc).description else None
+        response = app.make_response((render_template("error.html", error=exc, detail=detail), exc.code))
         if exc.code == 503:
             response.headers["Retry-After"] = "8"
         return response

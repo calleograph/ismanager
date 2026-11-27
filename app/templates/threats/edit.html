@@ -6,6 +6,11 @@
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 {% if row %}<input type="hidden" name="revision" value="{{ row.revision }}">{% endif %}
 {%- endmacro %}
+{% macro field_state(key) -%}
+{% if key in catalog.required %}aria-required="true"{% endif %}
+{% if key in missing %} aria-invalid="true" aria-describedby="threat-error"{% if key == missing[0] %} autofocus{% endif %}{% endif %}
+{%- endmacro %}
+{% if history and (history.rows or history.query or history.page>1) %}{% include "threats/index.html" %}{% endif %}
 <div class="threat-workspace">
   <aside class="threat-sidebar">
     <details class="panel threat-nav" open><summary>Шаги анкеты</summary>
@@ -27,12 +32,12 @@
   </aside>
   <div class="threat-body">
     <header class="threat-heading"><div><small>Генератор модели угроз</small><h1>{{ steps[step-1] }}</h1></div>
-      <span aria-label="Шаг {{ step }} из 11">{{ '%02d'|format(step) }} / 11</span>
+      <span>Шаг {{ step }} из 11</span>
       <progress value="{{ step }}" max="11" aria-label="Прогресс анкеты"></progress>
     </header>
-{% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
+{% if error %}<p class="notice error" role="alert" id="threat-error"{% if not missing %} tabindex="-1" autofocus{% endif %}>{{ error }}</p>{% endif %}
 {% if step < 11 %}
-<form class="threats-form" id="threat-form" method="post" action="{{ url_for('.edit',model_id=row.id,step=step) if row else url_for('.new') }}"{% if step in (1,4) %} enctype="multipart/form-data"{% endif %}>
+<form data-warn-unsaved class="threats-form" id="threat-form" method="post" action="{{ url_for('.edit',model_id=row.id,step=step) if row else url_for('.new') }}"{% if step in (1,4) %} enctype="multipart/form-data"{% endif %}>
   {{ state() }}
   {% if step==1 %}{% include "threats/profile.html" %}{% else %}
   <div class="threat-card">
@@ -43,11 +48,11 @@
     {% else %}
       {{ labels[k] }}{% if k in catalog.required %} *{% endif %}
       {% if kind=="enum" %}
-      <select name="{{ k }}"><option value="">Выберите…</option>
+      <select name="{{ k }}" {{ field_state(k) }}><option value="">Выберите…</option>
         {% for value,text in options.items() %}<option value="{{ value }}" {% if data.get(k)==value %}selected{% endif %}>{{ text.split(" — ",1)[-1] }}</option>{% endfor %}
       </select>
-      {% elif kind=="long_text" %}<textarea name="{{ k }}" rows="3" maxlength="8000">{{ data.get(k,"") }}</textarea>
-      {% else %}<input name="{{ k }}" value="{{ data.get(k,'') }}" maxlength="512">{% endif %}
+      {% elif kind=="long_text" %}<textarea name="{{ k }}" {{ field_state(k) }} rows="3" maxlength="8000">{{ data.get(k,"") }}</textarea>
+      {% else %}<input name="{{ k }}" {{ field_state(k) }} value="{{ data.get(k,'') }}" maxlength="512">{% endif %}
     {% endif %}
     </label>
   {% endfor %}
@@ -75,6 +80,7 @@
   {% elif step==7 %}
   <p>243 угрозы БДУ от 18.11.2026. Сохраните профильное решение или выберите собственное основание.</p>
   <label>Поиск по коду или названию <input type="search" id="threat-search" autocomplete="off"></label>
+  <p id="threat-matches" role="status" aria-live="polite">Показано угроз: {{ catalog.bank|length }} из {{ catalog.bank|length }}.</p>
   {% for batch in catalog.bank.items() | batch(20) %}<details class="threat-group" {% if loop.first %}open{% endif %}>
     <summary>{{ batch[0][0] }} — {{ batch[-1][0] }}</summary>
     {% for code,item in batch %}<label class="threat-choice" data-search="{{ (code ~ ' ' ~ item.name)|lower }}">{{ code }} · {{ item.name }}
@@ -103,8 +109,8 @@
 {% if result %}<p>УЗ-{{ result.level }} · Тип угроз {{ result.type }}{% if result.crypto %} · Класс СКЗИ {{ result.crypto['class'] }}{% endif %}</p>
 <p>{{ result.basis }}</p>{% endif %}
 <details><summary>Состав комплекта · {{ docs|length }} документов</summary><ol>{% for title in docs %}<li>{{ title }}</li>{% endfor %}</ol></details>
-{% if row.ready %}<p><a href="{{ url_for('.download',model_id=row.id) }}">Скачать документы (.zip)</a></p>
-{% else %}<form method="post" action="{{ url_for('.generate',model_id=row.id) }}">{{ state() }}<button>Сформировать документы</button></form>{% endif %}
+{% if row.ready %}<p><a class="btn" id="threat-zip" href="{{ url_for('.download',model_id=row.id) }}">{{ icon('download') }} Скачать документы (.zip)</a></p>
+{% else %}<form id="threat-generate" method="post" action="{{ url_for('.generate',model_id=row.id) }}">{{ state() }}<button>Сформировать документы</button></form>{% endif %}
 </section>{% endif %}
 {% if row %}<details class="threat-service"><summary>Действия с анкетой</summary><p><a href="{{ url_for('.export',model_id=row.id) }}">Скачать поля анкеты (.xlsx)</a></p>
   <details><summary>Удалить анкету</summary>
@@ -114,6 +120,6 @@
 </details>{% endif %}
   </div>
 </div>
-{% if not row %}{% include "threats/index.html" %}{% endif %}
+
 {% endblock %}
 {% block scripts %}<script src="{{ url_for('static',filename='threats.js') }}" defer></script>{% endblock %}

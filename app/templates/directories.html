@@ -1,0 +1,8 @@
+{% extends 'admin_layout.html' %}{% from 'admin_lists.html' import pages %}
+{% block title %}Каталоги LDAP и AD{% endblock %}
+{% block admin_content %}<div class="admin-head"><h1>Каталоги LDAP и AD</h1><a class="btn" href="{{ url_for('admin.profile') }}">{{ icon('plus') }} Добавить подключение</a></div>
+<section class="panel">
+<form class="admin-filter" method="get"><label>Название или сервер<input type="search" name="q" value="{{ query }}" maxlength="256"></label><button>Найти</button>{% if query %}<a href="{{ url_for('admin.directories') }}">Сбросить</a>{% endif %}</form>
+{% if profiles %}<table class="admin-records"><thead><tr><th>Каталог</th><th>Сервер</th><th>Состояние</th></tr></thead><tbody>{% for item in profiles %}<tr><td><a href="{{ url_for('admin.profile',profile_id=item.id) }}">{{ item.name }}</a><br><small>{{ 'Active Directory' if item.kind=='ad' else 'OpenLDAP' }}</small></td><td data-label="Сервер">{{ item.host }}</td><td data-label="Состояние">{{ 'Включено' if item.enabled else 'Отключено' }}</td></tr>{% endfor %}</tbody></table>
+{% elif query or page>1 %}<p role="status">Подключения не найдены.</p>{% else %}<p>Добавьте каталог для входа доменных администраторов. Локальная учётная запись доступна независимо от каталога.</p>{% endif %}
+{{ pages(page,more,'admin.directories',query) }}</section>{% endblock %}

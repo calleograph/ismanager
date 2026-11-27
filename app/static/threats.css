@@ -40,3 +40,35 @@ fieldset.threat-card>legend{position:absolute;top:1rem;left:clamp(13px,1.7vw,20p
 @media(max-width:760px){.threat-workspace{grid-template-columns:1fr;gap:10px}.threat-sidebar{position:static}.threat-nav.panel{padding:8px}.threat-nav ol{grid-template-columns:repeat(auto-fit,minmax(135px,1fr))}.threat-list-link{margin:4px 8px}.threat-excel .btn{max-width:100%;text-align:center}.threat-heading h1{font-size:25px}.threat-actions{bottom:2px}}
 .threat-summary{margin:12px 0;background:var(--tint);border-radius:12px;padding:11px}
 .threat-summary h2{font-size:.85rem;margin:0}.threat-summary p{font-size:.84rem;margin:4px 0 0}
+
+.threat-workspace select[aria-invalid=true], .threat-workspace input[aria-invalid=true],
+.threat-workspace textarea[aria-invalid=true] { border-color: var(--error); }
+.threat-profile .threat-excel { gap: .6rem 1rem; }
+.threat-profile .threat-sheet-help { margin: .25rem 0 .55rem; font-size: .86rem; }
+.threat-profile-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .7rem 1rem; border-top: 1px solid var(--line); padding-top: .75rem; }
+.threat-profile-fields label { font-weight: 650; }
+.threat-profile-fields select { width: 100%; }
+.threat-recent.panel { margin: 0 0 1rem; padding: .9rem 1.2rem; }
+.threat-recent h2 { font-size: 1.12rem; margin: 0 0 .25rem; }
+.threat-recent ul { list-style: none; margin: 0; padding: 0; max-height: 13rem; overflow-y: auto; }
+.threat-recent li { display: flex; justify-content: space-between; align-items: center; gap: .75rem; border-bottom: 1px solid var(--line); padding: .45rem 0; }
+.threat-recent li:last-child { border-bottom: 0; }
+.threat-recent li small { display: block; }
+.threat-recent li .btn { flex: none; }
+.threat-recent li .icon { width: 1rem; height: 1rem; }
+@media(max-width:760px) { .threat-profile-fields { grid-template-columns: 1fr; } }
+
+/* Keep keyboard focus above the wizard's sticky action bar. */
+html:has(.threat-actions) { scroll-padding-block-end: 5rem; }
+.threats-form :is(input, select, textarea, summary) { scroll-margin-block-end: 4rem; }
+
+@media(min-width:761px){
+ .object-choices{display:grid;grid-template-columns:1fr 1fr;column-gap:18px}
+}
+.threats-form .significance{padding:12px 16px}
+
+@media(min-width:761px) and (max-height:850px){
+ .threat-profile,.object-choices{padding-bottom:12px}
+ .threat-heading,.threat-card{margin-bottom:8px}
+ .threat-profile .threat-excel{margin-block:7px}
+}

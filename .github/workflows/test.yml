@@ -27,6 +27,8 @@ jobs:
       - run: PYTHON=$(command -v python) tests/active_directory/run.sh
       - run: CHROMIUM_PATH="$(command -v google-chrome)" python -m tests.live_web
       - run: CHROMIUM_PATH="$(command -v google-chrome)" python -m tests.live_generators
+      - run: CHROMIUM_PATH="$(command -v google-chrome)" python -m tests.live_admin_ux
+      - run: CHROMIUM_PATH="$(command -v google-chrome)" python -m tests.live_module_views
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

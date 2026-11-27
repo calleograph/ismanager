@@ -1,30 +1,36 @@
-{% extends 'base.html' %}
+{% extends 'admin_layout.html' %}
 {% block title %}{{ 'Ресурс SMB' if data.kind == 'smb' else 'Локальная папка' }}{% endblock %}
-{% block content %}
-<a href="{{ url_for('admin.storage') }}">Ресурсы хранения</a>
+{% block admin_content %}
+<a href="{{ url_for('admin.storage',**position) }}">Ресурсы хранения</a>
 <h1>{{ data.name if resource_id else ('Новый ресурс SMB' if data.kind == 'smb' else 'Новая локальная папка') }}</h1>
 {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
-<form method="post" class="panel">
+<form id="watch-resource" method="post" class="panel folder-form" data-warn-unsaved>
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="kind" value="{{ data.kind }}">
   <label>Название ресурса<input name="name" maxlength="120" value="{{ data.name }}" required></label>
   {% if data.kind == 'smb' %}
   <div class="form-grid">
     <label>Сервер SMB<input name="server" value="{{ data.server }}" placeholder="files.example.org" required></label>
-    <label>Порт SMB<input name="port" type="number" min="1" max="65535" value="{{ data.port }}" required></label>
+
     <label>Имя общего ресурса<input name="share" value="{{ data.share }}" placeholder="recordings" required></label>
-    <label>Папка внутри общего ресурса<input name="path" value="{{ data.path }}" placeholder="Пусто для корневой папки"></label>
+
     <label>Домен<input name="domain" value="{{ data.domain }}" autocomplete="off"></label>
     <label>Имя пользователя<input name="username" value="{{ data.username }}" autocomplete="off" required></label>
   </div>
   <label>Пароль SMB<input type="password" name="password" maxlength="2048" autocomplete="new-password"
     {% if resource_id %}placeholder="Оставьте пустым для сохранения пароля"{% else %}required{% endif %}></label>
+  <details{% if data.path or data.port|string != '445' or error %} open{% endif %}><summary>Порт и подпапка SMB</summary>
+    <div class="form-grid">
+    <label>Порт SMB<input name="port" type="number" min="1" max="65535" value="{{ data.port }}" required></label>
+    <label>Папка внутри общего ресурса<input name="path" value="{{ data.path }}" placeholder="Пусто для корневой папки"></label>
+    </div>
+  </details>
   {% else %}
   <label>Путь к папке<input name="path" value="{{ data.path }}" placeholder="Например, recordings" aria-describedby="storage-help"></label>
   <p class="muted" id="storage-help">Путь указывается внутри каталога для наблюдения, подключённого к IS Manager. Пустое поле выбирает его корень.</p>
   {% endif %}
-  <button name="action" value="save">Сохранить ресурс</button>
 </form>
+<div class="admin-save folder-save"><a href="{{ url_for('admin.storage',**position) }}">К ресурсам</a><button form="watch-resource" name="action" value="save">Сохранить ресурс</button></div>
 {% if resource_id %}
 <form method="post" class="panel">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

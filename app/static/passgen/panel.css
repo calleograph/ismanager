@@ -53,3 +53,31 @@
 .pass-salt{color:#a33b37}[data-theme=dark] .pass-salt{color:#ffaaa6}
 .pass-breakdown dl{display:grid;grid-template-columns:minmax(85px,auto) 1fr;gap:3px 10px;margin:5px 0 0}
 .pass-breakdown dt{color:var(--muted)}.pass-breakdown dd{margin:0}
+#pass-settings{margin:0}
+#pass-settings>summary{font-weight:650}
+#pass-error{color:var(--danger,var(--text));margin:5px 0 8px}
+#pass-error:empty{display:none}
+.pass-result-head>div:last-child{flex-shrink:0}
+.pass-row button{min-width:36px;min-height:36px}
+@media(min-width:821px){#pass-settings>summary{display:none}}
+@media(max-width:820px){
+  #pass-settings{margin:11px 0}
+  #pass-settings>summary{padding:6px 0}
+  .pass-tabs button,.pass-row button{min-height:40px}
+  .pass-row button{min-width:40px}
+  .pass-result-head{flex-wrap:wrap}
+}
+@media (max-width:340px) {
+  .pass-result-head>div:last-child { flex-shrink: 1; flex-wrap: wrap }
+  .pass-tabs, .pass-positions, .pass-checks { grid-template-columns: repeat(2,minmax(0,1fr)) }
+  .pass-advice { padding-right: 0; padding-top: 32px }
+}
+
+@media(min-width:821px) and (max-height:850px){
+ .pass-workspace .panel{padding:14px 18px}
+ .pass-intro h1{margin-bottom:6px}
+ .pass-advice{margin-bottom:12px}
+ #pass-results{margin-top:7px}
+ #pass-results li{padding:4px 0}
+ .pass-controls [role=tabpanel],.pass-controls fieldset{margin-block:10px}
+}

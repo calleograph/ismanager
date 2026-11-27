@@ -139,6 +139,60 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(self.post("/passwords/generate",mode="invalid").status_code,422)
         self.assertEqual(self.post("/redaction/",file=(io.BytesIO(b"invalid"),"test.xlsx")).status_code,422)
 
+    def test_verified_preview_binds_owner_content_version_and_replays_once(self):
+        from app.privacy.engine import Result
+
+        text = "Проверенный результат.\nВторая строка."
+        with patch("app.redaction.analyze", return_value=Result(text, [])):
+            preview = self.post("/redaction/", text="Исходный пример", preview="1")
+        ticket = re.search(r'name="ticket" value="([^"]+)"', preview.get_data(as_text=True))[1]
+        save = "/redaction/preview/save"
+        with self.app.app_context():
+            self.assertEqual(get_db().execute("SELECT count(*) FROM redactions").fetchone()[0], 0)
+        self.assertEqual(self.post(save, ticket=ticket, result="Другое значение").status_code, 422)
+        self.assertEqual(self.post(save, ticket=ticket + "x", result=text).status_code, 422)
+        with patch.dict(self.app.config, VERSION="different"):
+            self.assertEqual(self.post(save, ticket=ticket, result=text).status_code, 422)
+        with patch("itsdangerous.timed.TimestampSigner.get_timestamp", return_value=int(time.time()) + 1801):
+            self.assertEqual(self.post(save, ticket=ticket, result=text).status_code, 422)
+        self.login("two")
+        self.assertEqual(self.post(save, ticket=ticket, result=text).status_code, 404)
+        self.login("one")
+        with patch("app.redaction.analyze", side_effect=AssertionError("Проверка уже прошла")):
+            first = self.post(save, ticket=ticket, result=text.replace("\n", "\r\n"))
+            repeated = self.post(save, ticket=ticket, result=text)
+        self.assertEqual(first.status_code, 302)
+        self.assertEqual(first.location, repeated.location)
+        with self.app.app_context():
+            self.assertEqual([r[0] for r in get_db().execute("SELECT result FROM redactions")], [text])
+
+    def test_history_uses_owned_metadata_and_loads_only_on_index(self):
+        with self.app.app_context(), get_db() as db:
+            a, b = [r[0] for r in db.execute("SELECT id FROM users WHERE identity IN ('one','two') ORDER BY identity")]
+            insert = "INSERT INTO redactions(user_id,profile,created,result,stats,notes) VALUES(?,'faceless',?,'Synthetic body','{}','[]')"
+            db.execute(insert, (b, "2001-04-18 12:00:00"))
+            for n in range(70):
+                date = "2001-04-17 12:00:00" if n == 0 else "2031-05-20 12:00:00"
+                db.execute(insert, (a, date))
+                db.execute("INSERT INTO redaction_batches(owner,nonce,created) VALUES(?,?,?)", (a, str(n), date))
+
+        def rows(url):
+            return re.findall(r'<li>\s*<a href="(/redaction/(?:batches/)?\d+)"', self.client.get(url).get_data(as_text=True))
+
+        first = rows("/redaction/")
+        second = rows("/redaction/?page=2")
+        self.assertEqual((len(first), len(second), len(set(first) & set(second))), (50, 50, 0))
+        self.assertEqual(set(rows("/redaction/?q=17.04.2001")), {"/redaction/2", "/redaction/batches/1"})
+        self.assertEqual(rows("/redaction/?q=2001-04-18"), [])
+        self.assertEqual(rows("/redaction/?q=1"), ["/redaction/batches/1"])
+        self.assertEqual(rows("/redaction/?q=Synthetic"), [])
+        self.assertEqual(rows("/redaction/?before_batch=3"), ["/redaction/batches/2", "/redaction/batches/1"])
+        with patch("app.redaction.materials", side_effect=AssertionError("Список запрошен вне индекса")):
+            self.assertEqual(self.client.get("/redaction/2").status_code, 200)
+            self.assertEqual(self.post("/redaction/", text="").status_code, 422)
+        self.login("two")
+        self.assertEqual(self.client.get("/redaction/2").status_code, 404)
+
     @unittest.skipUnless((names.NLP_DIR / names.NER_FILE).exists(), "Install NLP models as documented")
     def test_owner_result_and_preview(self):
         data = "Mailbox: test@example.org\nПароль: KeepPrivate123!"

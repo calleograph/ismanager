@@ -1,25 +1,73 @@
 const themeButton = document.querySelector("#theme");
-themeButton?.addEventListener("click", () => {
-  const themes = ["glass", "dark", "light"];
-  const root = document.documentElement;
-  root.dataset.theme = themes[(themes.indexOf(root.dataset.theme) + 1) % themes.length];
-  try { localStorage.setItem("ismanager-theme", root.dataset.theme); } catch {}
-});
+const themes = {glass: ["Стекло", "monitor"], dark: ["Тёмная", "moon"], light: ["Светлая", "sun"]};
+
+function labelTheme() {
+  const [name, icon] = themes[document.documentElement.dataset.theme] || themes.glass;
+  const label = "Сменить тему. Текущая тема — " + name;
+  themeButton.title = label;
+  themeButton.setAttribute("aria-label", label);
+  const use = themeButton.querySelector("use");
+  use.setAttribute("href", use.getAttribute("href").split("#")[0] + "#" + icon);
+}
+if (themeButton) {
+  labelTheme();
+  themeButton.addEventListener("click", () => {
+    const root = document.documentElement;
+    const options = Object.keys(themes);
+    root.dataset.theme = options[(options.indexOf(root.dataset.theme) + 1) % options.length];
+    try { localStorage.setItem("ismanager-theme", root.dataset.theme); } catch {}
+    labelTheme();
+  });
+}
+
 document.addEventListener("click", async event => {
   const confirmButton = event.target.closest("[data-confirm]");
-  if (confirmButton && !window.confirm(confirmButton.dataset.confirm)) event.preventDefault();
+  if (confirmButton && !window.confirm(confirmButton.dataset.confirm)) {
+    event.preventDefault();
+    return;
+  }
   const button = event.target.closest("[data-copy]");
   if (!button) return;
   const target = document.querySelector(button.dataset.copy);
   if (!target) return;
+  let message = button.parentElement.querySelector("[data-copy-message]");
+  if (!message) {
+    message = document.createElement("span");
+    message.dataset.copyMessage = "";
+    message.setAttribute("role", "status");
+    button.after(message);
+  }
   try {
     await navigator.clipboard.writeText(target.value ?? target.textContent);
-    const previous = button.textContent;
-    button.textContent = "Скопировано";
-    setTimeout(() => { button.textContent = previous; }, 1500);
+    message.textContent = "Скопировано";
   } catch {
     target.focus();
     if (target.select) target.select();
-    else { const range = document.createRange(); range.selectNodeContents(target); getSelection().removeAllRanges(); getSelection().addRange(range); }
+    else {
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+    }
+    message.textContent = "Текст выделен. Используйте команду «Копировать» на устройстве.";
   }
+});
+
+// Only edited forms need a navigation guard; a clean page can use the browser's back cache.
+const dirtyForms = new Set();
+function warnOnLeave(event) {
+  event.preventDefault();
+  event.returnValue = "";
+}
+function markDirty(event) {
+  const form = event.target.form;
+  if (!form?.hasAttribute("data-warn-unsaved") || (!event.target.name && event.target.type === "search")) return;
+  dirtyForms.add(form);
+  window.addEventListener("beforeunload", warnOnLeave);
+}
+document.addEventListener("input", markDirty, true);
+document.addEventListener("change", markDirty, true);
+document.addEventListener("submit", event => {
+  if (event.defaultPrevented || !dirtyForms.delete(event.target)) return;
+  if (!dirtyForms.size) window.removeEventListener("beforeunload", warnOnLeave);
 });

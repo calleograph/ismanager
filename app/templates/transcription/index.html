@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Транскрибация{% endblock %}
+{% from "personal_history.html" import search, pages %}
 {% block content %}
 <h1>Транскрибация</h1>
 <div class="panel">
@@ -7,7 +8,7 @@
   <form method="post" enctype="multipart/form-data" data-asr-upload>
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>Аудио или видео
-      <input required type="file" name="media" accept="audio/*,video/*,.mkv,.m4a,.opus,.webm,.flac,.wma,.wmv,.amr,.3gp">
+      <input required type="file" id="media" name="media" accept="audio/*,video/*,.mkv,.m4a,.opus,.webm,.flac,.wma,.wmv,.amr,.3gp">
     </label>
     <p class="muted">До 512 МиБ и 6 часов. GigaAM распознаёт русскую речь локально.</p>
     <button type="submit">Расшифровать запись</button>
@@ -19,15 +20,19 @@
   </form>
   <p class="muted">{{ model_status }}</p>
 </div>
-<section class="panel">
+<section class="panel" id="history">
   <h2>Мои записи</h2>
-  {% if jobs %}
-  <table><thead><tr><th>Файл</th><th>Состояние</th><th>Добавлен, UTC</th></tr></thead>
-  <tbody>{% for job in jobs %}<tr>
-    <td><a href="{{ url_for('.detail', job_id=job.id) }}">{{ job.filename }}</a></td>
-    <td>{{ status[job.status] }}</td><td>{{ job.created }}</td>
-  </tr>{% endfor %}</tbody></table>
+  {{ search(history, 'transcription.index', 'Поиск по имени записи') }}
+  {% if history.rows %}
+  <ul class="asr-jobs">{% for job in history.rows %}<li>
+    <div><a href="{{ url_for('.detail', job_id=job.id) }}">{{ job.filename }}</a>
+      <small>{{ status[job.status] }} · {{ job.created }} UTC</small></div>
+    {% if job.status == 'done' %}<a class="btn secondary" href="{{ url_for('.export', job_id=job.id) }}" aria-label="Скачать TXT · {{ job.filename }}">{{ icon('download') }} TXT</a>{% endif %}
+  </li>{% endfor %}</ul>
+  {% elif history.query %}<p>Записей с таким именем не найдено.</p>
+  {% elif history.page>1 %}<p>На этой странице записей нет.</p>
   {% else %}<p class="muted">Здесь появятся ваши записи и стенограммы.</p>{% endif %}
+  {{ pages(history, 'transcription.index') }}
 </section>
 {% endblock %}
 

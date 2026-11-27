@@ -12,3 +12,22 @@
 .asr-console p:empty, .asr-console pre:empty { display: none; }
 .asr-console progress { display: block; width: 100%; margin: .65rem 0; }
 .asr-console a { color: #b2e5ff; }
+
+.asr-detail { max-width: 58rem; margin-inline: auto; }
+.asr-detail h1 { font-size: clamp(1.5rem, 3vw, 2.3rem); margin: .35rem 0 1rem; }
+.asr-detail .panel { padding: clamp(1rem, 2.3vw, 1.65rem); }
+.asr-heading, .asr-toolbar, .asr-jobs li { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.asr-heading, .asr-jobs li { justify-content: space-between; }
+.asr-heading h2 { margin: 0; }
+.asr-heading span, .asr-remove summary { color: var(--muted); }
+.asr-toolbar { margin: .9rem 0; }
+.asr-detail .asr-toolbar .icon, .asr-jobs .icon { width: 1.05rem; height: 1.05rem; }
+.asr-detail textarea { min-height: 8rem; margin-bottom: .7rem; font-weight: 400; line-height: 1.55; }
+.asr-detail .asr-history { margin: 1rem 0 0; border-top: 1px solid var(--line); padding-top: .75rem; }
+.asr-jobs { list-style: none; padding: 0; margin: 0; }
+.asr-jobs li { flex-wrap: nowrap; padding: .65rem 0; border-bottom: 1px solid var(--line); }
+.asr-jobs li:last-child { border: 0; }
+.asr-jobs li small { display: block; }
+.asr-jobs a.btn { flex: none; }
+
+.asr-announcement{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}

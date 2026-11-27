@@ -46,7 +46,7 @@ def run(web_image, worker_image, models, nginx_image):
         login(page, origin, first, secrets.token_urlsafe(24) + "X9")
         assert page.goto(origin + "/admin/").ok
         expect(page.get_by_text(origin + "/", exact=True)).to_be_visible()
-        expect(page.get_by_role("heading", name="Технические характеристики")).to_be_visible()
+        expect(page.locator("#technical summary")).to_have_text("Технические характеристики")
         expect(page.get_by_text("Веб-управление отключено при установке.")).to_be_visible()
         assert not page.locator('button[value="update"]').count()
         assert any(cookie["name"] == "ismanager_http_session" and not cookie["secure"] for cookie in context.cookies())
@@ -67,8 +67,17 @@ def run(web_image, worker_image, models, nginx_image):
         assert "день" in page.locator("#asr-text").input_value().lower()
         expect(page.locator("[data-asr-log]")).to_contain_text("Распознавание русской речи")
         expect(page.locator("[data-asr-log]")).to_contain_text("Готово")
+        expect(page.get_by_role("button", name="Сохранить правки")).to_be_disabled()
+        page.locator("#asr-text").fill("Учебная расшифровка. Текст проверен.")
+        expect(page.locator("[data-pending-edits]")).to_contain_text("Сохраните правки")
+        page.get_by_role("button", name="Сохранить правки").click()
+        page.get_by_role("link", name="Мои записи").click()
+        with page.expect_download() as saved:
+            page.get_by_role("link", name="Скачать TXT").click()
+        assert Path(saved.value.path()).read_text().strip() == "Учебная расшифровка. Текст проверен."
         page.goto(origin + "/admin/")
         with page.expect_response(lambda r: r.url.endswith("/admin/system-metrics")) as updated:
+            page.locator("#technical summary").click()
             expect(page.locator("[data-worker-ram]")).to_contain_text("МиБ")
         metrics = updated.value.json()
         assert 0 <= metrics["cpu"]["percent"] <= 100 and metrics["cores"] > 0

@@ -1,7 +1,7 @@
-{% extends 'base.html' %}
+{% extends 'admin_layout.html' %}
 {% block title %}Пользователи и сеансы{% endblock %}
-{% block content %}
-<a href="{{ url_for('admin.index') }}">← Администрирование</a>
+{% block admin_content %}
+
 <h1>Пользователи и сеансы</h1>
 <section class="panel">
 <form class="actions" action="{{ url_for('admin.users') }}" method="get">
@@ -12,15 +12,16 @@
 </form>
 <p class="muted">Пользователи каталогов появляются после входа. Отключение доступа завершает их сеансы в IS Manager.</p>
 {% if users %}
-<table><thead><tr><th scope="col">Пользователь</th><th scope="col">Источник</th><th scope="col">Роль и защита</th><th scope="col">Сеансы</th><th scope="col">Действия</th></tr></thead>
+<table class="admin-records"><thead><tr><th scope="col">Пользователь</th><th scope="col">Источник</th><th scope="col">Роль и защита</th><th scope="col">Сеансы</th><th scope="col">Действия</th></tr></thead>
 <tbody>{% for user in users %}
 <tr>
   <td><strong>{{ user.display_name }}</strong>{% if user.username != user.display_name %}<br>{{ user.username }}{% endif %}</td>
-  <td>{{ 'Локальная учётная запись' if user.local else user.directory or 'Удалённый каталог' }}{% if user.directory and not user.directory_enabled %}<br><small>Подключение отключено</small>{% endif %}</td>
-  <td>{{ 'Администратор' if user.admin else 'Пользователь' }}{% if user.disabled %}<br><strong>Доступ отключён</strong>{% endif %}
+  <td data-label="Источник">{{ 'Локальная учётная запись' if user.local else user.directory or 'Удалённый каталог' }}{% if user.directory and not user.directory_enabled %}<br><small>Подключение отключено</small>{% endif %}</td>
+  <td data-label="Роль">{{ 'Администратор' if user.admin else 'Пользователь' }}{% if user.disabled %}<br><strong>Доступ отключён</strong>{% endif %}
   <br><small>{{ '2FA включена' if user.has_totp else '2FA выключена' }}</small></td>
-  <td>{{ user.sessions }}</td>
+  <td data-label="Сеансы">{{ user.sessions }}</td>
   <td>
+    <a class="user-events" href="{{ url_for('admin.journal',account=user.id) }}" aria-label="События {{ user.username }}">События</a>
     {% if user.sessions %}
     <form method="post" action="{{ url_for('admin.revoke',user_id=user.id,q=query or none,active=1 if active else none,before=before) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

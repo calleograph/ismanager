@@ -1,0 +1,6 @@
+{% macro pages(page, more, endpoint, q='',kind='') -%}
+{% if page>1 or more %}<nav class="admin-pages" aria-label="Страницы списка">
+{% if page>1 %}<a rel="prev" href="{{ url_for(endpoint, q=q or none, kind=kind or none, page=page-1) }}">← Предыдущие 50</a>{% endif %}
+<span>Страница {{ page }}</span>
+{% if more %}<a rel="next" href="{{ url_for(endpoint, q=q or none, kind=kind or none, page=page+1) }}">Следующие 50 →</a>{% endif %}</nav>{% endif %}
+{%- endmacro %}

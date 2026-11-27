@@ -1,37 +1,39 @@
-{% extends 'base.html' %}{% block title %}Подключение каталога{% endblock %}{% block content %}
-<h1>{{ row.name if row else 'Новое подключение' }}</h1>{% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
-<section class="panel"><form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="save">
-<div class="form-grid"><label>Название<input name="name" value="{{ row.name if row else '' }}" required></label>
+{% extends 'admin_layout.html' %}{% block title %}Подключение каталога{% endblock %}
+{% block admin_content %}
+<div class="admin-head"><h1>{{ row.name if row else 'Новое подключение' }}</h1>{% if row %}<a href="#diagnostics">Диагностика подключения</a>{% endif %}</div>
+{% if error %}<p class="notice error" role="alert" id="directory-error" data-invalid-field="{{ error_field }}">{{ error }}{% if not row %} Введите пароль сервисной записи повторно.{% endif %}</p>{% endif %}
+<form id="directory-form" method="post" enctype="multipart/form-data" class="admin-editor" data-warn-unsaved>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="save">
+<section class="panel"><h2>Подключение к каталогу</h2>
+<div class="form-grid"><label>Название<input name="name" value="{{ name }}" maxlength="120" required></label>
 <label>Тип каталога<select name="kind"><option value="ad">Active Directory</option><option value="openldap" {{ 'selected' if data.kind=='openldap' }}>OpenLDAP</option></select></label>
 <label>Сервер<input name="host" value="{{ data.host }}" placeholder="dc.example.org" required></label>
 <label>Протокол<select name="protocol"><option value="ldaps">LDAPS</option><option value="starttls" {{ 'selected' if data.protocol=='starttls' }}>LDAP + STARTTLS</option></select></label>
-<label>Порт<input type="number" name="port" value="{{ data.port or 636 }}" min="1" max="65535" required></label>
-<label>Таймаут, с<input type="number" name="timeout" value="{{ data.timeout or 5 }}" min="1" max="60" required></label>
 <label>Base DN<input name="base_dn" value="{{ data.base_dn }}" placeholder="dc=example,dc=org" required></label>
-<label>Сервисная запись<input name="bind_dn" value="{{ data.bind_dn }}" required></label>
-<label>Пароль сервисной записи<input type="password" name="password" autocomplete="new-password" {{ 'required' if not row }} placeholder="{{ 'Задан · оставьте пустым для сохранения' if row else '' }}"></label>
-<label>Домен NetBIOS<input name="domain" value="{{ data.domain }}"></label>
+<label>Порт<input type="number" name="port" value="{{ data.port or 636 }}" min="1" max="65535" required></label>
+<label>Сервисная запись<input name="bind_dn" value="{{ data.bind_dn }}" placeholder="cn=reader,dc=example,dc=org" required></label>
+<label>Пароль сервисной записи<input type="password" name="password" autocomplete="new-password" {{ 'required' if not row }} placeholder="{{ 'Оставьте пустым для сохранения' if row else '' }}"></label></div></section>
+<details class="panel admin-disclosure" {% if error %}open{% endif %}><summary>Параметры домена и TLS</summary>
+<div class="form-grid"><label>Домен NetBIOS<input name="domain" value="{{ data.domain }}"></label>
 <label>Суффикс UPN<input name="suffix" value="{{ data.suffix }}"></label>
 <label>Атрибут логина<input name="login_attr" value="{{ data.login_attr }}" placeholder="sAMAccountName / uid"></label>
-<label>Атрибут имени<input name="name_attr" value="{{ data.name_attr }}" placeholder="displayName"></label></div>
-<label>Порядок проверки (меньший номер раньше)<input type="number" name="priority" value="{{ data.priority or 100 }}" min="1" max="9999" required></label>
-<label>Сертификаты CA в формате PEM<textarea name="ca" rows="3" placeholder="По умолчанию используются системные корневые сертификаты">{{ data.ca }}</textarea></label>
-<label>Заменить CA файлом PEM или DER<input type="file" name="certificate" accept=".pem,.cer,.crt,.der"></label>
-<fieldset id="directory-admins" {% if row %}data-search="{{ url_for('admin.principals', profile_id=row.id) }}"{% endif %}>
-<legend>Право администрирования IS Manager</legend>
-{% if row %}<label class="field">Найти пользователя или группу<input type="search" id="principal-query" placeholder="Имя, логин или название группы" autocomplete="off" aria-controls="principal-results"></label>
+<label>Атрибут имени<input name="name_attr" value="{{ data.name_attr }}" placeholder="displayName"></label>
+<label>Таймаут, с<input type="number" name="timeout" value="{{ data.timeout or 5 }}" min="1" max="60" required></label>
+<label>Порядок проверки (меньший номер раньше)<input type="number" name="priority" value="{{ data.priority or 100 }}" min="1" max="9999" required></label></div>
+<label class="field">Сертификаты CA в формате PEM<textarea name="ca" rows="3" placeholder="По умолчанию используются системные корневые сертификаты">{{ data.ca }}</textarea></label>
+<label class="field">Заменить CA файлом PEM или DER<input type="file" name="certificate" accept=".pem,.cer,.crt,.der"></label></details>
+<section class="panel" id="directory-admins" {% if row %}data-search="{{ url_for('admin.principals', profile_id=row.id) }}"{% endif %}>
+<h2>Право администрирования IS Manager</h2>
+{% if row %}<label class="field">Найти пользователя или группу<input type="search" id="principal-query" placeholder="Имя, логин или название группы" autocomplete="off" aria-controls="principal-results" aria-describedby="principal-status"></label>
 <p id="principal-status" role="status" class="muted"></p><div id="principal-results" class="principal-results" hidden></div>
-{% else %}<p>Сохраните подключение. После этого можно искать группы и пользователей через сервисную учётную запись.</p>{% endif %}
+{% else %}<p>После сохранения здесь можно будет выбрать пользователей и группы каталога.</p>{% endif %}
 <label class="field">Группы администраторов<textarea name="admin_groups" rows="2" placeholder="По одному DN на строку">{{ (data.admin_groups or [])|join('\n') }}</textarea></label>
-<div id="principal-users">
-{% for uid,label in data.get('admin_users', {}).items() %}<label><input type="checkbox" checked name="admin_user" value="{{ uid }}|{{ label }}"> {{ label }}</label>{% endfor %}
-</div></fieldset>
-<input type="hidden" name="role_flags" value="1">
-<label><input type="checkbox" name="use_for_admins" {{ 'checked' if data.get('use_for_admins',true) }}> Вход администраторов каталога</label>
-<label><input type="checkbox" name="enabled" {{ 'checked' if not row or row.enabled }}> Разрешить вход через это подключение</label>
-<button>Сохранить подключение</button></form></section>
-{% if row %}<section class="panel"><h2>Диагностика сохранённого подключения</h2><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label>Тестовый пользователь<input name="test_user"></label><label>Пароль для проверки входа<input type="password" autocomplete="off" name="test_password"></label><div class="actions"><button name="action" value="test">Проверить</button><button class="secondary" data-confirm="Удалить подключение и завершить его сеансы?" name="action" value="delete">Удалить подключение</button></div></form>
-{% if steps %}<ol>{% for step in steps %}<li>{{ '✓' if step.ok else '×' }} {{ step.step }} · {{ step.detail }}</li>{% endfor %}</ol>{% endif %}</section>{% endif %}
+<div id="principal-users">{% for uid,label in data.get('admin_users', {}).items() %}<label><input type="checkbox" checked name="admin_user" value="{{ uid }}|{{ label }}"> {{ label }}</label>{% endfor %}</div>
+<input type="hidden" name="role_flags" value="1"><label class="field"><input type="checkbox" name="use_for_admins" {{ 'checked' if data.get('use_for_admins',true) }}> Вход администраторов каталога</label>
+<label class="field"><input type="checkbox" name="enabled" {{ 'checked' if enabled }}> Разрешить вход через это подключение</label>
+</section><div class="admin-save"><a href="{{ url_for('admin.directories') }}">К списку каталогов</a><button>Сохранить подключение</button></div></form>
+{% if row %}<section class="panel" id="diagnostics"><h2>Диагностика сохранённого подключения</h2><form method="post" action="#diagnostics"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="form-grid"><label>Тестовый пользователь<input name="test_user" value="{{ tested_user }}"></label><label>Пароль для проверки входа<input type="password" autocomplete="off" name="test_password"></label></div><button name="action" value="test">Проверить</button></form>
+{% if steps %}<ol aria-label="Результаты диагностики">{% for step in steps %}<li>{{ 'Успешно' if step.ok else 'Ошибка' }} · {{ step.step }} · {{ step.detail }}</li>{% endfor %}</ol>{% endif %}</section>
+<details class="panel admin-disclosure"><summary>Удаление подключения</summary><p>Действующие сеансы пользователей этого каталога будут завершены.</p><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="secondary" data-confirm="Удалить подключение и завершить его сеансы?" name="action" value="delete">Удалить подключение</button></form></details>{% endif %}
 {% endblock %}
-
-{% block scripts %}<script defer src="{{ url_for('static',filename='directory_picker.js') }}"></script>{% endblock %}
+{% block scripts %}{{ super() }}<script defer src="{{ url_for('static',filename='directory_picker.js') }}"></script>{% endblock %}

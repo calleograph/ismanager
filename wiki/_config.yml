@@ -1,0 +1,8 @@
+title: Wiki IS Manager
+description: Руководство по работе с документами, записями и настройками IS Manager
+lang: ru
+url: https://calleograph.github.io
+baseurl: /ismanager
+theme: jekyll-theme-primer
+plugins:
+  - jekyll-relative-links

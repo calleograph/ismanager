@@ -4,6 +4,7 @@ from pathlib import Path
 import secrets
 import tempfile
 import threading
+from zipfile import ZipFile
 
 from playwright.sync_api import expect, sync_playwright
 from werkzeug.serving import make_server
@@ -29,7 +30,7 @@ def check_passwords(page, origin):
     expect(results.first.locator(".pass-breakdown")).to_contain_text("Случайная вставка")
     page.get_by_role("button", name="Ещё", exact=True).click()
     assert results.locator("code").all_text_contents() != first
-    page.get_by_role("button", name="Все", exact=True).click()
+    page.get_by_role("button", name="Копировать все", exact=True).click()
     assert page.evaluate("navigator.clipboard.readText()").splitlines() == results.locator("code").all_text_contents()
 
     page.get_by_role("tab", name="Своя фраза").click()
@@ -64,7 +65,7 @@ def check_passwords(page, origin):
     expect(fallback.locator(".pass-breakdown").first).to_contain_text("Mayak")
     fallback.get_by_role("button", name="Скопировать вариант 1", exact=True).click()
     assert fallback.evaluate("getSelection().toString()") == fallback.locator("#pass-results code").first.inner_text()
-    fallback.get_by_role("button", name="Все", exact=True).click()
+    fallback.get_by_role("button", name="Копировать все", exact=True).click()
     assert fallback.locator("#pass-manual").input_value().splitlines() == fallback.locator("#pass-results code").all_text_contents()
     fallback.close()
 
@@ -78,6 +79,8 @@ def check_wizard(page, origin):
     assert blank.value.suggested_filename.endswith(".xlsx")
     page.get_by_role("button", name="Далее").click()
     expect(page.get_by_role("alert")).to_contain_text("Заполните")
+    expect(page.locator("[name=systemType]")).to_be_focused()
+    expect(page.locator("[name=systemType]")).to_have_attribute("aria-invalid", "true")
     page.locator("[name=systemType]").select_option("erp_1c")
     expect(page.locator('[data-option="erp_1c"]')).to_be_visible()
     page.locator("[name=systemNetworkCondition]").select_option("corporate_internet")
@@ -91,6 +94,12 @@ def check_wizard(page, origin):
     page.get_by_role("button", name="Назад", exact=True).click()
     draft = page.url
     values = dict(systemType="crm", systemNetworkCondition="isolated_no_internet", objectType="ispdn", infosystemShortName="Импорт из Excel")
+    values.update(operatorFullName="Учебный оператор", operatorShortName="Оператор", operatorLegalAddress="Учебный адрес",
+                  infosystemFullName="Тестовая система", dataCategory_other=True, subjectType="employee")
+    for i in range(1, 4):
+        values[f"commissionRole_{i}"] = "chairman" if i == 1 else "member"
+        values[f"commissionPosition_{i}"] = f"Должность {i}"
+        values[f"commissionName_{i}"] = f"Участник {i}"
     with page.expect_response(lambda r: r.request.method == "POST" and r.url == draft) as uploaded:
         page.get_by_label("Загрузить заполненный файл").set_input_files(
             dict(name="anketa.xlsx", mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -101,6 +110,23 @@ def check_wizard(page, origin):
     page.get_by_role("button", name="Все мои анкеты").click()
     expect(page.get_by_role("link", name="Импорт из Excel")).to_be_visible()
     expect(page.locator(".threat-recent a")).to_have_count(1)
+    page.locator(".threat-recent a").click()
+    # This saved draft already reached step 2 before importing the workbook.
+    for step in range(2, 11):
+        if step == 7:
+            page.locator("#threat-search").fill("несуществующая-строка")
+            expect(page.locator("#threat-matches")).to_contain_text("Совпадений нет")
+            page.locator("#threat-search").fill("УБИ.001")
+            expect(page.locator(".threat-choice:visible")).to_have_count(1)
+        page.get_by_role("button", name="Далее").click()
+    with page.expect_download() as package:
+        page.get_by_role("button", name="Сформировать и скачать ZIP").click()
+    with ZipFile(package.value.path()) as archive:
+        assert archive.namelist() and all(name.endswith(".docx") for name in archive.namelist())
+    page.goto(origin + "/threats/")
+    with page.expect_download() as saved:
+        page.get_by_role("link", name="Скачать документы ZIP · Импорт из Excel").click()
+    assert saved.value.suggested_filename.endswith(".zip")
 
 
 def run(tmp):
@@ -124,11 +150,18 @@ def run(tmp):
                     page.goto(f"{origin}/{module}/")
                     if module == "passwords":
                         expect(page.locator("#pass-results li")).to_have_count(7)
+                        settings = page.locator("#pass-settings")
+                        assert settings.evaluate("el => el.open") == (width > 820)
+                        if width <= 820:
+                            settings.locator("summary").click()
+                            expect(page.locator("#word-length")).to_be_visible()
+                            settings.locator("summary").click()
                     else:
                         assert page.locator(".threat-nav").evaluate("el => el.open") == (width > 760)
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (width, module)
                     if os.getenv("GENERATOR_SCREENSHOTS"):
-                        page.screenshot(path=Path(os.environ["GENERATOR_SCREENSHOTS"]) / f"{module}-{width}.png")
+                        masked = [page.locator("#pass-results code, #pass-results small, .pass-breakdown:visible, #pass-manual:visible")] if module == "passwords" else []
+                        page.screenshot(path=Path(os.environ["GENERATOR_SCREENSHOTS"]) / f"{module}-{width}.png", mask=masked)
             assert not errors, errors
             browser.close()
     finally:

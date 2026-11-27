@@ -20,8 +20,9 @@
       <button type="button" role="tab" id="tab-{{ value }}" aria-controls="panel-{{ value }}" aria-selected="{{ 'true' if value=='dictionary' else 'false' }}" tabindex="{{ 0 if value=='dictionary' else -1 }}" data-mode="{{ value }}">{{ label }}</button>
       {% endfor %}
     </div>
+    <details id="pass-settings" open><summary>Настройки генерации</summary>
     <div id="panel-dictionary" role="tabpanel" aria-labelledby="tab-dictionary" data-modes="dictionary">
-      <p><strong>Пароль собирается из случайных русских слов.</strong> Генератор берёт слова из встроенного словаря целиком, записывает их латиницей и добавляет случайную вставку. Кнопка «Ещё» заменяет весь набор.</p>
+      <p>Слова из русского словаря записываются латиницей. Между ними, в начале или в конце добавляется случайная вставка.</p>
       <label class="pass-range">Длина до <output for="word-length">18</output><input type="range" id="word-length" name="word_length" min="12" max="18" value="18"></label>
       <div class="pass-scale"><span>12</span><span>12–15 — два слова</span><span>18</span></div>
     </div>
@@ -32,7 +33,7 @@
       <small id="pass-guidance">Минимум 3 слова и 15 знаков в готовом пароле.</small>
     </div>
     <div id="panel-story" role="tabpanel" aria-labelledby="tab-story" data-modes="story" hidden>
-      <p><strong>Число, существительное, действие и результат складываются в короткую историю.</strong> Генератор берёт первые три или четыре буквы каждого слова и добавляет вставку. Под паролем остаётся полная история на русском.</p>
+      <p>Пароль состоит из первых букв слов и случайной вставки. Под ним — история на русском, которая поможет его запомнить.</p>
     </div>
     <div id="panel-random" role="tabpanel" aria-labelledby="tab-random" data-modes="random" hidden>
       <label class="pass-range">Длина пароля <output for="random-length">16</output><input type="range" id="random-length" name="random_length" min="4" max="64" value="16"></label>
@@ -44,12 +45,14 @@
       <label><input type="checkbox" name="exclude" checked> Убрать похожие символы <small>I, l, 1, O, 0</small></label>
       <label class="field">Спецсимволы <input name="specials" value="!@#$%^&amp;*+" maxlength="18" spellcheck="false"></label>
     </div>
-    <fieldset data-modes="custom dictionary story"><legend>Случайная вставка (соль)</legend>
+    <fieldset data-modes="custom dictionary story"><legend>Положение случайной вставки</legend>
       <div class="pass-positions">
       {% for value,label in [('random','Случайно'),('start','В начале'),('middle','В середине'),('end','В конце')] %}
         <label><input type="radio" name="position" value="{{ value }}" {% if value=='random' %}checked{% endif %}><span>{{ label }}</span></label>
       {% endfor %}</div>
     </fieldset>
+    </details>
+    <p role="status" id="pass-error"></p>
     <button type="submit" disabled id="pass-generate"><span>Создать из словаря</span>{{ icon('chevron-right') }}</button>
     <details class="pass-engine"><summary>Где создавать пароли</summary>
       <label>Обработчик <select name="processor"><option value="browser">В этом браузере</option><option value="server">На сервере IS Manager</option></select></label>
@@ -58,14 +61,14 @@
     <noscript>Включите JavaScript для выбора режима и генерации.</noscript>
   </form>
   <section class="panel pass-output" id="pass-output" aria-labelledby="pass-title">
-    <div class="pass-result-head"><div><p>Готовые варианты</p><h2 id="pass-title">Пароли из словаря</h2></div>
+    <div class="pass-result-head"><div><h2 id="pass-title">Пароли из словаря</h2></div>
       <div><button type="button" class="secondary" id="pass-more" title="Создать новый набор">{{ icon('refresh-cw') }} Ещё</button>
-      <button type="button" class="secondary" id="pass-copy-all" title="Скопировать все варианты" disabled>{{ icon('copy') }} Все</button></div>
+      <button type="button" class="secondary" id="pass-copy-all" title="Скопировать все варианты" disabled>{{ icon('copy') }} Копировать все</button></div>
     </div>
+    <p role="status" id="pass-status"></p>
     <p id="pass-empty">Нажмите кнопку генерации, чтобы получить семь вариантов.</p>
     <ul id="pass-results"></ul>
     <textarea aria-label="Все пароли для копирования" id="pass-manual" rows="7" readonly hidden></textarea>
-    <p role="status" id="pass-status"></p>
   </section>
 </div>
 <template id="pass-row"><li>

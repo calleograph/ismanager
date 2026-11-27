@@ -1,23 +1,28 @@
-{% extends 'base.html' %}
+{% extends 'admin_layout.html' %}
+{% from 'admin_lists.html' import pages %}
 {% block title %}Наблюдение за папками{% endblock %}
-{% block content %}
-<a href="{{ url_for('admin.index') }}">Администрирование</a>
+{% block admin_content %}
+
 <h1>Наблюдение за папками</h1>
 <section class="panel">
   <div class="actions">
     <a class="btn" href="{{ url_for('admin.watch_edit', kind=kind or 'transcription') }}">Добавить правило</a>
     <a class="btn secondary" href="{{ url_for('admin.storage') }}">Ресурсы хранения</a>
   </div>
+  <form class="admin-filter" method="get"><label>Поиск правил<input type="search" name="q" value="{{ query }}" placeholder="Название или входная папка" maxlength="256"></label>
+  <label>Назначение<select name="kind"><option value="">Все</option>{% for key,title in kinds.items() %}<option value="{{ key }}" {% if key==kind %}selected{% endif %}>{{ title }}</option>{% endfor %}</select></label><button>Найти</button>
+  {% if query or kind %}<a href="{{ url_for('admin.watches') }}">Сбросить</a>{% endif %}</form>
   {% if rules %}
-  <table><thead><tr><th>Правило</th><th>Назначение</th><th>Входная папка</th><th>Последний обход, UTC</th><th>В работе</th><th>Ошибки</th></tr></thead>
+  <table class="admin-records"><thead><tr><th>Правило</th><th>Назначение</th><th>Входная папка</th><th>Последний обход, UTC</th><th>В работе</th><th>Ошибки</th></tr></thead>
     <tbody>{% for rule in rules %}
-    <tr><td><a href="{{ url_for('admin.watch_edit', rule_id=rule.id) }}">{{ rule.name }}</a><br>{{ 'Включено' if rule.enabled else 'Выключено' }}</td>
-      <td>{{ kinds[rule.kind] }}</td><td>{{ rule.input_name }}{% if rule.input_folder %} / {{ rule.input_folder }}{% endif %}</td>
-      <td>{{ rule.scan_time or 'Ожидается обход' }}{% if rule.error %}<p class="notice error">{{ rule.error }}</p>{% endif %}</td>
-      <td>{{ rule.pending }}</td><td>{{ rule.errors }}</td></tr>
+    <tr><td><a href="{{ url_for('admin.watch_edit',rule_id=rule.id,q=query or none,page=page if page>1 else none,kind=kind or none) }}">{{ rule.name }}</a><br>{{ 'Включено' if rule.enabled else 'Выключено' }}</td>
+      <td data-label="Назначение">{{ kinds[rule.kind] }}</td><td data-label="Вход">{{ rule.input_name }}{% if rule.input_folder %} / {{ rule.input_folder }}{% endif %}</td>
+      <td data-label="Обход, UTC">{{ rule.scan_time or 'Ожидается обход' }}{% if rule.error %}<p class="notice error">{{ rule.error }}</p>{% endif %}</td>
+      <td data-label="В работе">{{ rule.pending }}</td><td data-label="Ошибки">{{ rule.errors }}</td></tr>
     {% endfor %}</tbody>
   </table>
-  {% else %}<p>Добавьте правило для автоматической обработки файлов из папки.</p>{% endif %}
+  {% elif query or kind or page>1 %}<p role="status">Правила не найдены.</p>{% else %}<p>Добавьте правило для автоматической обработки файлов из папки.</p>{% endif %}
   {% if kind %}<a href="{{ url_for('admin.watches') }}">Все правила наблюдения</a>{% endif %}
+{{ pages(page,more,'admin.watches',query,kind) }}
 </section>
 {% endblock %}

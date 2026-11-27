@@ -1,4 +1,14 @@
-<section class="panel threat-recent"><h2>Мои анкеты</h2>
-  {% for row in rows %}<a class="history-link" href="{{ url_for('.edit',model_id=row.id,step=row.stage) }}"><strong>{{ row.name }}</strong><small>{{ "Документы сформированы" if row.ready else "Шаг " ~ row.stage ~ " из 11" }}</small></a>
-  {% else %}<p>Здесь появятся сохранённые анкеты.</p>{% endfor %}
+{% from "personal_history.html" import search, pages %}
+<section class="panel threat-recent" id="history">
+  <h2>Мои анкеты</h2>
+  {{ search(history, 'threats.index', 'Поиск по названию анкеты') }}
+  {% if history.rows %}
+  <ul>{% for row in history.rows %}<li>
+    <div><a href="{{ url_for('.edit',model_id=row.id,step=row.stage) }}">{{ row.name }}</a>
+      <small>{{ "Документы сформированы" if row.ready else "Шаг " ~ row.stage ~ " из 11" }}</small></div>
+    {% if row.ready %}<a class="btn secondary" href="{{ url_for('.download',model_id=row.id) }}" aria-label="Скачать документы ZIP · {{ row.name }}">{{ icon('download') }} ZIP</a>{% endif %}
+  </li>{% endfor %}</ul>
+  {% elif history.query %}<p>Анкет с таким названием не найдено.</p>
+  {% else %}<p>На этой странице анкет нет.</p>{% endif %}
+  {{ pages(history, 'threats.index') }}
 </section>

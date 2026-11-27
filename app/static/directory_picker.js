@@ -1,5 +1,14 @@
 'use strict';
 (() => {
+  const connection = document.getElementById('directory-form');
+  const port = connection.elements.port;
+  const protocol = connection.elements.protocol;
+  const defaults = {ldaps:'636', starttls:'389'};
+  let previous = protocol.value;
+  protocol.addEventListener('change', () => {
+    if (port.value === defaults[previous]) port.value = defaults[protocol.value];
+    previous = protocol.value;
+  });
   const field = document.querySelector('#directory-admins[data-search]');
   if (!field) return;
   const input = field.querySelector('#principal-query');
@@ -36,6 +45,7 @@
       }
       selected.checked = true;
     }
+    groups.dispatchEvent(new Event('change', {bubbles:true}));
     input.value = '';
     input.focus();
     close();
@@ -76,8 +86,22 @@
   input.addEventListener('focus', schedule);
   input.addEventListener('input', schedule);
   field.addEventListener('keydown', event => {
-    if (event.key === 'Escape') { close(); message.textContent = ''; }
-    if (event.target === input && event.key === 'ArrowDown') list.querySelector('button')?.focus();
+    const buttons = [...list.querySelectorAll('button')];
+    if (event.key === 'Escape' && !list.hidden) {
+      event.preventDefault();
+      input.focus();
+      close();
+      message.textContent = '';
+      return;
+    }
+    const index = buttons.indexOf(event.target);
+    if (event.key === 'ArrowDown' && buttons.length && (event.target === input || index >= 0)) {
+      event.preventDefault();
+      buttons[Math.min(index + 1, buttons.length - 1)].focus();
+    } else if (event.key === 'ArrowUp' && index >= 0) {
+      event.preventDefault();
+      (buttons[index - 1] || input).focus();
+    }
   });
   field.addEventListener('focusout', event => {
     if (!field.contains(event.relatedTarget)) { close(); message.textContent = ''; }

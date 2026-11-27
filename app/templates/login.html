@@ -2,7 +2,7 @@
 <section class="login-card panel"><div class="brandmark">IS</div><h1>Вход администратора</h1>
 {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
 <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-<label>Имя пользователя<input name="username" autocomplete="username" required autofocus></label>
+<label>Имя пользователя<input name="username" maxlength="256" value="{{ request.form.get('username','')[:256] }}" autocomplete="username" required autofocus></label>
 <label>Пароль<input name="password" type="password" autocomplete="current-password" required></label>
-<details><summary>Код двухфакторной защиты</summary><input name="code" inputmode="numeric" aria-label="Одноразовый код" autocomplete="one-time-code" maxlength="6"></details>
+<details {% if request.form.get('code') %}open{% endif %}><summary>Код двухфакторной защиты</summary><input name="code" inputmode="numeric" aria-label="Одноразовый код" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}"></details>
 <button type="submit">Войти {{ icon('chevron-right') }}</button></form></section>{% endblock %}

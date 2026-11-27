@@ -1,0 +1,16 @@
+{% macro search(history, endpoint, label, pattern=none) -%}
+{% if history.query or history.page>1 or history.rows|length>5 %}
+<form class="row" role="search" method="get" action="{{ url_for(endpoint, _anchor='history') }}">
+  <label>{{ label }} <input type="search" name="q" value="{{ history.query }}" maxlength="160"{% if pattern %} pattern="{{ pattern }}" title="{{ label }}"{% endif %}></label>
+  <button class="secondary">Найти</button>
+  {% if history.query %}<a href="{{ url_for(endpoint, _anchor='history') }}">Сбросить поиск</a>{% endif %}
+</form>
+{% endif %}
+{%- endmacro %}
+{% macro pages(history, endpoint) -%}
+{% if history.page>1 or history.more %}<nav class="row" aria-label="Страницы моих материалов">
+  {% if history.page>1 %}<a rel="prev" href="{{ url_for(endpoint, q=history.query or none, page=history.page-1, _anchor='history') }}">← Предыдущие 50</a>{% endif %}
+  <span>Страница {{ history.page }}</span>
+  {% if history.more %}<a rel="next" href="{{ url_for(endpoint, q=history.query or none, page=history.page+1, _anchor='history') }}">Следующие 50 →</a>{% endif %}
+</nav>{% endif %}
+{%- endmacro %}

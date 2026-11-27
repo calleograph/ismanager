@@ -1,15 +1,27 @@
-{% extends 'base.html' %}{% block title %}Система{% endblock %}{% block content %}<h1>Администрирование</h1>
-<section class="panel"><div class="row"><h2>Каталоги LDAP и AD</h2><a class="btn" href="{{ url_for('admin.profile') }}">Добавить подключение</a></div>
-{% for item in profiles %}<p><a href="{{ url_for('admin.profile',profile_id=item.id) }}">{{ item.name }}</a> · {{ 'Включено' if item.enabled else 'Отключено' }}</p>{% else %}<p>Подключите каталог для входа администраторов. Локальный администратор доступен независимо от каталога.</p>{% endfor %}</section>
-<section class="panel"><h2>Сетевой доступ</h2>
-{% set mode = config.ACCESS_MODE %}
-<p>{{ {'http':'Прямой HTTP в локальной сети', 'proxy':('HTTP' if config.PUBLIC_URL.startswith('http://') else 'HTTPS') + ' через обратный прокси', 'https':'Прямой HTTPS'}.get(mode) }} · <code>{{ config.PUBLIC_URL }}</code></p>
-{% if config.PUBLIC_URL.startswith('http://') %}<p>Соединение открытое. Используйте этот адрес в доверенной сети или через VPN.</p>{% endif %}</section>
-<section class="panel"><h2>Обработчик GigaAM</h2><p>{{ model_status }}</p>
-<p>Записей в очереди — {{ counts.queued }}.</p>
-<div class="actions"><a class="btn secondary" href="{{ url_for('admin.storage') }}">Ресурсы хранения</a>
-<a class="btn secondary" href="{{ url_for('admin.watches') }}">Наблюдение за папками</a></div></section>
-<section class="panel" data-system-metrics="{{ url_for('admin.system_metrics') }}"><h2>Технические характеристики</h2>
+{% extends 'admin_layout.html' %}{% block title %}Система{% endblock %}
+{% block admin_content %}
+<div class="admin-head"><h1>Администрирование</h1><span class="admin-version">IS Manager · {{ config.VERSION }}</span></div>
+{% include 'maintenance.html' %}
+<div class="admin-overview">
+<section class="panel"><h2>{{ icon('users-round') }} Пользователи и сеансы</h2>
+<div class="admin-numbers"><a href="{{ url_for('admin.users') }}"><strong>{{ counts.users }}</strong><span>Учётных записей</span></a><a href="{{ url_for('admin.users',active=1) }}"><strong>{{ counts.sessions }}</strong><span>Активных сеансов</span></a></div>
+<a href="{{ url_for('admin.users') }}">Управление пользователями</a></section>
+<section class="panel"><h2>{{ icon('server') }} Обработчик GigaAM</h2><p>{{ model_status }}</p><p>Записей в очереди — {{ counts.queued }}.</p>
+<div class="admin-links"><a href="{{ url_for('admin.storage') }}">Ресурсы хранения</a><a href="{{ url_for('admin.watches') }}">Наблюдение за папками</a></div></section>
+<section class="panel"><h2>{{ icon('network') }} Каталоги LDAP и AD</h2>
+{% for item in profiles[:5] %}<p><a href="{{ url_for('admin.profile',profile_id=item.id) }}">{{ item.name }}</a> · {{ 'Включено' if item.enabled else 'Отключено' }}</p>{% else %}<p>Подключите каталог для входа доменных администраторов.</p>{% endfor %}
+<div class="admin-links"><a href="{{ url_for('admin.profile') }}">Добавить подключение</a>{% if profiles|length>5 %}<a href="{{ url_for('admin.directories') }}">Все подключения</a>{% endif %}</div></section>
+<section class="panel"><h2>{{ icon('router') }} Сетевой доступ</h2>
+{% set mode=config.ACCESS_MODE %}
+<p>{{ {'http':'Прямой HTTP в локальной сети','proxy':('HTTP' if config.PUBLIC_URL.startswith('http://') else 'HTTPS') + ' через обратный прокси','https':'Прямой HTTPS'}.get(mode) }}</p><code>{{ config.PUBLIC_URL }}</code>
+{% if config.PUBLIC_URL.startswith('http://') %}<p>Используйте этот адрес в доверенной сети или через VPN.</p>{% endif %}</section>
+</div>
+<details class="panel admin-disclosure" id="access-policy"><summary>Политика входа</summary><form data-warn-unsaved method="post" action="{{ url_for('admin.access') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="form-grid">
+{% for name,label,lo,hi in [('hours','Срок нового сеанса, ч',1,168),('attempts_user','Неудачных входов для одного логина',3,100),('attempts_ip','Неудачных входов с одного IP',3,500),('minutes','Окно ограничения, мин',1,60)] %}
+<label>{{ label }}<input type="number" required name="{{ name }}" min="{{ lo }}" max="{{ hi }}" value="{{ policy[name] }}"></label>{% endfor %}</div>
+<label><input type="checkbox" name="admin_totp" {{ 'checked' if policy.admin_totp }}> Обязательный второй фактор для администраторов</label><button>Сохранить политику</button></form></details>
+<details class="panel admin-disclosure" id="technical" data-system-metrics="{{ url_for('admin.system_metrics') }}"><summary>Технические характеристики</summary>
 {% set live = system.live %}{% set resources = live.worker %}
 <table><thead><tr><th>Компонент</th><th>Состояние</th></tr></thead><tbody>
 <tr><th>Процессор сервера</th><td>{{ system.cpu or 'Данные недоступны' }}{% if live.cores %} · {{ live.cores }} логических ядер{% endif %}</td></tr>
@@ -21,26 +33,7 @@
 <tr><th>ОС</th><td>Linux {{ system.kernel }} · {{ system.arch }}</td></tr>
 <tr><th>Распознавание</th><td>GigaAM v3 E2E RNNT{% if system.worker.device %} · {{ system.worker.device|upper }} · потоков Torch {{ system.worker.threads }}{% endif %}</td></tr>
 {% for name,version in system.components.items() %}<tr><th>{{ name }}</th><td>{{ version }}</td></tr>{% endfor %}
-</tbody></table></section>
-<section class="panel"><h2>Обновления и резервные копии</h2><p>Установлена версия {{ config.VERSION }}.</p>
-{% if operator in ('ready','busy','legacy') %}
-{% if operator=='legacy' %}<p>Подключён помощник предыдущей версии. Команды доступны. Чтобы видеть его занятость, выполните <code>./install.sh --operator</code> в каталоге установки.</p>{% endif %}
-<p>{{ status.get('message','Помощник подключён.') }}</p><form class="actions" method="post" action="{{ url_for('admin.maintenance') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-{% for key, label in [('check','Проверить'),('update','Обновить'),('backup','Создать копию'),('rollback','Откатить версию')] %}<button class="secondary" name="operation" value="{{ key }}" {% if operator=='busy' %}disabled{% endif %} {% if key in ('update','rollback','backup') %}data-confirm="Операция может временно прервать работу приложения. Продолжить?"{% endif %}>{{ label }}</button>{% endfor %}</form>
-{% else %}
-<p>{{ 'Веб-управление отключено при установке.' if operator=='disabled' else 'Помощник веб-управления не подключён.' }}</p>
-<p>В каталоге установки на сервере:</p>
-<pre>python3 scripts/manage.py check
-python3 scripts/manage.py update
-python3 scripts/manage.py backup</pre>
-<p>Для включения кнопок в этой панели выполните <code>./install.sh --operator</code> от имени владельца установки.</p>
-{% endif %}</section>
-<section class="panel"><h2>Политика входа</h2><form method="post" action="{{ url_for('admin.access') }}">
-<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="form-grid">
-{% for name,label,lo,hi in [('hours','Срок нового сеанса, ч',1,168),('attempts_user','Неудачных входов для одного логина',3,100),('attempts_ip','Неудачных входов с одного IP',3,500),('minutes','Окно ограничения, мин',1,60)] %}
-<label>{{ label }}<input type="number" required name="{{ name }}" min="{{ lo }}" max="{{ hi }}" value="{{ policy[name] }}"></label>{% endfor %}</div>
-<label><input type="checkbox" name="admin_totp" {{ 'checked' if policy.admin_totp }}> Обязательный второй фактор для администраторов</label><button>Сохранить политику</button></form></section>
-<section class="panel"><div class="row"><h2>Пользователи и сеансы</h2><a class="btn secondary" href="{{ url_for('admin.users') }}">Управление пользователями</a></div>
-<p>Учётных записей — {{ counts.users }}. <a href="{{ url_for('admin.users',active=1) }}">Активных сеансов — {{ counts.sessions }}</a>.</p></section>
-<section class="panel"><div class="row"><h2>Журнал доступа и настроек</h2><a class="btn secondary" href="{{ url_for('admin.journal') }}">Открыть журнал</a></div><table><thead><tr><th>Время UTC</th><th>Событие</th><th>Пользователь</th></tr></thead><tbody>{% for item in events %}<tr><td>{{ item.time }}</td><td>{{ item.event|audit_event }}{% if item.target %} · {{ item.target }}{% endif %}</td><td>{{ item.username or '—' }}</td></tr>{% endfor %}</tbody></table></section>{% endblock %}
-{% block scripts %}<script defer src="{{ url_for('static', filename='system-metrics.js') }}"></script>{% endblock %}
+</tbody></table></details>
+<section class="panel"><div class="row"><h2>Журнал доступа и настроек</h2><a class="btn secondary" href="{{ url_for('admin.journal') }}">Открыть журнал</a></div><table><thead><tr><th>Время UTC</th><th>Событие</th><th>Пользователь</th></tr></thead><tbody>{% for item in events %}<tr><td>{{ item.time }}</td><td>{{ item.event|audit_event }}{% if item.target %} · {{ item.target }}{% endif %}</td><td>{{ item.username or '—' }}</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}
+{% block scripts %}{{ super() }}<script defer src="{{ url_for('static',filename='maintenance.js') }}"></script><script defer src="{{ url_for('static',filename='system-metrics.js') }}"></script>{% endblock %}

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -14,7 +15,7 @@ from ldap3.utils.dn import parse_dn
 
 from . import directory, journal, telemetry, watch_admin
 from .asr_store import model_status
-from .auth import digest, protected, reveal
+from .auth import protected, reveal
 from .db import audit, auth_settings, get_db
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -80,7 +81,7 @@ def directory_login(login, password):
 @bp.get("/")
 def index():
     db = get_db()
-    profiles = db.execute("SELECT id,name,enabled FROM directories ORDER BY coalesce(json_extract(config,'$.priority'),100),id").fetchall()
+    profiles = db.execute("SELECT id,name,enabled FROM directories ORDER BY coalesce(json_extract(config,'$.priority'),100),id LIMIT 6").fetchall()
     counts = db.execute("""SELECT (SELECT COUNT(*) FROM users WHERE identity NOT LIKE 'guest:%') AS users,
         (SELECT COUNT(*) FROM sessions WHERE expires>unixepoch()) AS sessions,
         (SELECT COUNT(*) FROM transcripts WHERE status='queued') +
@@ -88,16 +89,22 @@ def index():
          WHERE r.enabled AND r.kind='transcription' AND f.state='queued') AS queued""").fetchone()
     events = db.execute("""SELECT a.time,a.event,u.username,t.username AS target FROM audit a
         LEFT JOIN users u ON u.id=a.actor LEFT JOIN users t ON t.id=a.target_user
-        ORDER BY a.id DESC LIMIT 25""").fetchall()
-    status = {}
-    try:
-        status = json.loads((Path(os.getenv("CONTROL_DIR", "/control")) / "status.json").read_text())
-    except (OSError, ValueError):
-        pass
+        ORDER BY a.id DESC LIMIT 5""").fetchall()
     data = current_app.config["DATA_DIR"]
-    return render_template("admin.html", profiles=profiles, counts=counts, events=events, status=status,
-                           policy=auth_settings(), model_status=model_status(data), system=telemetry.system_info(data),
-                           operator=operator_state())
+    return render_template("admin.html", profiles=profiles, counts=counts, events=events, maintenance=maintenance_status(),
+                           policy=auth_settings(), model_status=model_status(data), system=telemetry.system_info(data))
+
+
+@bp.get("/directories/")
+def directories():
+    query = request.args.get("q", "").strip()[:256]
+    page = watch_admin.page_number()
+    profiles = get_db().execute("""
+        SELECT id,name,enabled,json_extract(config,'$.host') host,json_extract(config,'$.kind') kind
+        FROM directories WHERE instr(casefold(name || ' ' || coalesce(json_extract(config,'$.host'),'')),?)>0
+        ORDER BY coalesce(json_extract(config,'$.priority'),100),id LIMIT 51 OFFSET ?
+    """, (query.casefold(), (page - 1)*50)).fetchall()
+    return render_template("directories.html", profiles=profiles[:50], query=query, page=page, more=len(profiles)>50)
 
 
 @bp.get("/system-metrics")
@@ -179,10 +186,14 @@ def revoke(user_id):
 
 
 def operator_request(operation):
+    key = current_app.secret_key
+    assert key is not None  # Validated by the application factory.
+    secret = key.encode() if isinstance(key, str) else key
+    signature = hashlib.sha256(secret + b":operator").hexdigest()
     with socket.socket(socket.AF_UNIX) as sock:
         sock.settimeout(1)
         sock.connect(os.getenv("CONTROL_DIR", "/control") + "/operator.sock")
-        sock.sendall((digest(current_app.secret_key + ":operator") + " " + operation + "\n").encode())
+        sock.sendall(f"{signature} {operation}\n".encode())
         return sock.makefile("rb").readline(32).strip()
 
 
@@ -197,31 +208,75 @@ def operator_state():
         return "unavailable"
 
 
+def control_record(name):
+    try:
+        path = Path(os.getenv("CONTROL_DIR", "/control")) / name
+        record = json.loads(path.read_text())
+        if isinstance(record, dict):
+            return record, path.stat().st_mtime_ns
+    except (OSError, ValueError):
+        pass
+    return {}, 0
+
+
+@bp.get("/maintenance/status")
+def maintenance_status():
+    report, stamp = control_record("operation.json")
+    legacy, old_stamp = control_record("status.json")
+    release, _ = control_record("release.json")
+    version = release.get("version")
+    if isinstance(version, str) and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", version):
+        release["url"] = "https://github.com/calleograph/ismanager/releases/tag/" + version
+    else:
+        release = {}
+    operator = operator_state()
+    # Legacy helpers overwrite status.json after the manager exits. The structured report keeps all stages.
+    if not report or (old_stamp > stamp and (legacy.get("message", "").startswith("Выполняется операция:") or
+                                             operator == "busy" and report.get("state") != "running")):
+        message = legacy.get("message", "")
+        report = {"id": str(old_stamp), "message": message, "events": [],
+                  "state": "running" if message.startswith("Выполняется операция:") or operator == "busy" else "idle"}
+    return {"operator": operator, "report": report, "installed": current_app.config["VERSION"], "release": release}
+
+
 @bp.post("/maintenance")
 def maintenance():
     op = request.form.get("operation", "")
     if op not in {"check", "update", "rollback", "backup"}:
         abort(400)
+    if op != "check" and request.form.get("native_confirm") and not request.form.get("allow_stop"):
+        abort(400, description="Подтвердите временную остановку сервиса в форме обслуживания.")
+    accepted = False
     if (Path(os.getenv("CONTROL_DIR", "/control")) / "operator-disabled").is_file():
-        flash("Веб-управление отключено при установке. Команды для сервера приведены ниже.")
-        return redirect(url_for("admin.index"))
-    try:
-        if operator_request(op) == b"ok":
-            with get_db():
-                audit("maintenance." + op, g.user["id"])
-            flash("Задача принята. Обновите страницу для просмотра результата.")
-        else:
-            flash("Помощник занят или запрос отклонён.", "error")
-    except OSError:
-        flash("Помощник обновлений недоступен. На сервере выполните ./install.sh --operator.", "error")
-    return redirect(url_for("admin.index"))
+        message = "Веб-управление отключено при установке. Команды для сервера приведены ниже."
+    else:
+        try:
+            accepted = operator_request(op) == b"ok"
+            if accepted:
+                with get_db():
+                    audit("maintenance." + op, g.user["id"])
+                message = "Команда принята помощником."
+            else:
+                message = "Помощник занят или запрос отклонён. Проверьте состояние операции."
+        except OSError:
+            message = "Нет ответа помощника. Проверьте состояние операции и службу на сервере."
+    if request.accept_mimetypes.best == "application/json":
+        return {"accepted": accepted, "message": message}, 202 if accepted else 409
+    flash(message, "info" if accepted else "error")
+    return redirect(url_for("admin.index", _anchor="maintenance"))
+
+
+class DirectoryFieldError(ValueError):
+    def __init__(self, field, message):
+        super().__init__(message)
+        self.field = field
 
 
 def validate(data):
     if data["kind"] not in {"ad", "openldap"} or data["protocol"] not in {"ldaps", "starttls"}:
         raise ValueError("Выберите протокол и тип каталога.")
     if not re.fullmatch(r"[a-zA-Z0-9.-]{1,253}", data["host"]):
-        raise ValueError("Укажите имя узла или IPv4-адрес.")
+        raise DirectoryFieldError("host", "Укажите имя узла или IPv4-адрес в поле «Сервер».")
     if not 1 <= data["port"] <= 65535 or not 1 <= data["timeout"] <= 60:
         raise ValueError("Проверьте порт и таймаут (1–60 секунд).")
     if not data["bind_dn"] or not data["base_dn"]:
@@ -248,15 +303,22 @@ def profile(profile_id):
     if profile_id and row is None:
         abort(404)
     data = json.loads(row["config"]) if row else {}
+    name = row["name"] if row else ""
+    enabled = bool(row["enabled"]) if row else True
     steps = []
     error = ""
+    error_field = ""
     if request.method == "POST":
         action = request.form.get("action")
         try:
             if action == "save":
+                name = request.form.get("name", "").strip()
+                enabled = "enabled" in request.form
                 data = {key: request.form.get(key, "").strip() for key in
                         ("host", "protocol", "kind", "domain", "suffix", "ca", "base_dn", "bind_dn", "login_attr", "name_attr")}
-                data.update(port=int(request.form.get("port", 636)), timeout=int(request.form.get("timeout", 5)))
+                for key, default in (("port","636"),("timeout","5"),("priority","100")):
+                    data[key] = request.form.get(key, default)
+                data["use_for_admins"] = "use_for_admins" in request.form or "role_flags" not in request.form
                 previous = json.loads(row["config"]) if row else {}
                 data["user_groups"] = previous.get("user_groups", [])
                 data["use_for_users"] = previous.get("use_for_users", bool(row))
@@ -268,10 +330,13 @@ def profile(profile_id):
                 for value in selected:
                     uid, _, label = value.partition("|")
                     data["admin_users"][str(UUID(uid))] = label[:256] or uid
-                data["priority"] = int(request.form.get("priority", 100))
+                for key, label in (("port", "Порт"), ("timeout", "Таймаут"), ("priority", "Порядок проверки")):
+                    try:
+                        data[key] = int(data[key])
+                    except ValueError:
+                        raise DirectoryFieldError(key, f"Введите целое число в поле «{label}».") from None
                 if not 1 <= data["priority"] <= 9999:
-                    raise ValueError("Порядок проверки должен быть от 1 до 9999.")
-                data["use_for_admins"] = "use_for_admins" in request.form or "role_flags" not in request.form
+                    raise DirectoryFieldError("priority", "Порядок проверки должен быть от 1 до 9999.")
                 certificate = request.files.get("certificate")
                 if certificate and certificate.filename:
                     raw = certificate.stream.read(65537)
@@ -283,7 +348,6 @@ def profile(profile_id):
                     except ValueError:
                         raise ValueError("Требуется сертификат в формате PEM или DER.") from None
                 validate(data)
-                name = request.form.get("name", "").strip()
                 pwd = request.form.get("password", "")
                 if not 1 <= len(name) <= 120 or (not pwd and not row):
                     raise ValueError("Укажите название подключения и пароль сервисной записи.")
@@ -322,8 +386,10 @@ def profile(profile_id):
             else:
                 abort(400)
         except (ValueError, ssl.SSLError, directory.LdapError, sqlite3.IntegrityError) as exc:
+            error_field = "name" if isinstance(exc, sqlite3.IntegrityError) else getattr(exc, "field", "")
             error = "Название подключения уже используется." if isinstance(exc, sqlite3.IntegrityError) else str(exc)
-    return render_template("directory.html", row=row, data=data, steps=steps, error=error)
+    return render_template("directory.html", row=row, data=data, name=name, enabled=enabled,
+                           steps=steps, error=error, error_field=error_field, tested_user=request.form.get("test_user", "")[:256])
 
 
 @bp.get("/directory/<int:profile_id>/principals")

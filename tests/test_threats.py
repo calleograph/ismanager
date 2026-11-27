@@ -150,6 +150,22 @@ class ThreatWorkflow(unittest.TestCase):
             self.assertIn("high_staff_turnover", row["data"])
             self.assertIn(SAMPLE["infosystemShortName"], row["data"])
 
+    def test_named_history_and_ready_exports_belong_to_owner(self):
+        with self.app.app_context():
+            db = get_db()
+            with db:
+                db.executemany("INSERT INTO threat_models(owner,name,data,output) VALUES (?,?,?,?)",
+                               [(1, f"Анкета {i}", "{}", b"zip") for i in range(51)] +
+                               [(2, "Чужая анкета", "{}", b"private")])
+        first = self.client.get("/threats/?q=АнКеТа").text
+        second = self.client.get("/threats/?q=анкета&page=2").text
+        self.assertIn("Следующие 50", first)
+        self.assertNotIn("Анкета 0<", first)
+        self.assertIn("Анкета 0<", second)
+        self.assertIn("Скачать документы ZIP", second)
+        self.assertNotIn("Чужая анкета", first + second)
+        self.assertIn("не найдено", self.client.get("/threats/?q=нет-совпадений").text)
+
     def test_wizard_and_documents(self):
         self.assertEqual(self.client.get("/threats/").status_code, 200)
         uploaded = workbook(SAMPLE)

@@ -1,17 +1,36 @@
 #!/usr/bin/env python3
 """Restricted host helper. The web container never has access to the Docker socket."""
+import fcntl
 import hashlib
+import json
 import secrets
 import socket
 import subprocess
 import sys
 
 from manage import ROOT, STATE, replace, settings
-import json
 
 
 def status(text):
     replace(STATE / "control" / "status.json", json.dumps({"message": text}, ensure_ascii=False), 0o644)
+
+
+def manager_busy():
+    """Share the CLI lock so multiple tabs and host commands see the same activity."""
+    with (STATE / "operation.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        path = STATE / "control/operation.json"
+        try:
+            report = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return False
+        if isinstance(report, dict) and report.get("state") == "running":
+            report.update(state="error", message="Команда прервана. Проверьте сервисы и журнал помощника на сервере.")
+            replace(path, json.dumps(report, ensure_ascii=False), 0o644)
+        return False
 
 
 def main():
@@ -51,10 +70,11 @@ def main():
                     if (STATE / "control" / "operator-disabled").exists():
                         client.sendall(b"disabled\n")
                         continue
+                    busy = job is not None or manager_busy()
                     if msg[1] == "ping":
-                        client.sendall(b"busy\n" if job else b"ready\n")
+                        client.sendall(b"busy\n" if busy else b"ready\n")
                         continue
-                    if job or msg[1] not in {"backup", "update", "rollback", "check"}:
+                    if busy or msg[1] not in {"backup", "update", "rollback", "check"}:
                         client.sendall(b"no\n")
                         continue
                     with (STATE / "operator.log").open("wb") as log:

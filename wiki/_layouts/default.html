@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="{{ site.lang }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% seo %}
+  <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
+  <style>
+    body { color: #172840; }
+    .wiki-head { background: #192f50; }
+    .wiki-head nav, main { max-width: 58rem; margin: 0 auto; padding-inline: clamp(1rem, 4vw, 2.5rem); }
+    .wiki-head nav { display: flex; align-items: center; justify-content: space-between; min-height: 3.25rem; }
+    .wiki-head a { color: white; }
+    .wiki-head a:first-child { font-weight: 700; }
+    main { padding-block: clamp(1.25rem, 3vw, 2.5rem); overflow-wrap: anywhere; }
+    .markdown-body a { color: #154b9c; }
+    a:focus-visible { outline: 3px solid #3578cf; outline-offset: 2px; }
+    .skip { position: absolute; top: -4rem; left: .5rem; padding: .5rem; background: white; }
+    .skip:focus { top: .3rem; }
+    @media (max-width: 600px) {
+      .markdown-body h1 { font-size: 1.6rem; }
+      .markdown-body td, .markdown-body th { padding: .35rem .45rem; }
+      .markdown-body pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#article">К тексту</a>
+  <header class="wiki-head">
+    <nav aria-label="Навигация руководства">
+      <a href="{{ '/' | relative_url }}">IS Manager</a>
+      <a href="https://github.com/calleograph/ismanager/releases">Выпуски</a>
+    </nav>
+  </header>
+  <main id="article" class="markdown-body" tabindex="-1">{{ content }}</main>
+</body>
+</html>

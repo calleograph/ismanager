@@ -176,3 +176,43 @@ def test_directory_search_keeps_groups_when_an_entry_hides_its_id(monkeypatch):
     monkeypatch.setattr(directory, "_service", lambda _cfg: LimitedConnection())
     items = directory.search_principals(cfg, "")
     assert [(item["kind"], item["label"]) for item in items] == [("group", "Group")]
+
+
+def test_admin_bookmark_survives_password_and_totp_enrollment(tmp_path):
+    import pyotp
+
+    app = create_app(dict(TESTING=True, DATA_DIR=tmp_path, SECRET_KEY=secrets.token_hex(32)))
+    client = app.test_client()
+    primary = app.test_cli_runner().invoke(args=["admin-password"]).output.strip()
+    with app.app_context():
+        db = get_db()
+        db.execute("UPDATE auth_settings SET admin_totp=1")
+        db.commit()
+    assert client.get("/admin/storage/new?kind=smb&q=private-filter&next=https://outside.example/").location == "/login"
+    with client.session_transaction() as state:
+        assert tuple(state["admin_return"]) == ("admin.storage_edit", None, "smb")
+        assert "private-filter" not in str(state) and "outside.example" not in str(state)
+    def post(path, **data):
+        csrf = token(client.get("/login" if path=="/login" else "/account"))
+        return client.post(path, data={**data,"csrf_token":csrf})
+    assert post("/login", username="admin", password=primary).location == "/account"
+    new = secrets.token_urlsafe(32) + "a1"
+    assert post("/account", action="password", current=primary, new=new, repeat=new).location == "/account"
+    assert post("/account", action="prepare").location == "/account"
+    with client.session_transaction() as state:
+        code = pyotp.TOTP(state["enroll"]).now()
+    assert post("/account", action="enable", code=code).location == "/admin/storage/new?kind=smb"
+    with client.session_transaction() as state:
+        assert "admin_return" not in state
+    assert client.get("/admin/storage/new?kind=smb").status_code == 200
+
+
+def test_login_ignores_external_targets_and_api_calls(tmp_path):
+    app = create_app(dict(TESTING=True, DATA_DIR=tmp_path, SECRET_KEY=secrets.token_hex(32)))
+    _, pwd = first_login(app)
+    client = app.test_client()
+    assert client.get("/admin/directory/1/principals?q=private-login").location == "/login"
+    response = client.post("/login?next=https://outside.example", data={
+        "username":"admin", "password":pwd, "next":"//outside.example", "csrf_token":token(client.get("/login")),
+    })
+    assert response.location == "/"

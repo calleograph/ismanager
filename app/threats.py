@@ -7,6 +7,7 @@ from flask import Blueprint, abort, flash, g, redirect, render_template, request
 from PIL import Image, UnidentifiedImageError
 
 from .db import get_db
+from .personal_history import history_page
 from .threat_model import (
     BY_STEP,
     CAT,
@@ -16,6 +17,7 @@ from .threat_model import (
     FIELDS,
     LABELS,
     RANK,
+    REQUIRED,
     STEPS,
     XML_INVALID,
     assess,
@@ -239,11 +241,12 @@ def edit(model_id, step):
 
 
 def wizard(row, data, step, error=None):
-    rows = () if row else get_db().execute(
-        "SELECT id,name,stage,updated,output IS NOT NULL AS ready FROM threat_models "
-        "WHERE owner=? ORDER BY updated DESC,id DESC",
-        (g.user["id"],),
-    )
+    history = None if row else history_page("""SELECT id,name,stage,output IS NOT NULL AS ready
+        FROM threat_models WHERE owner=? AND instr(casefold(name),?)>0
+        ORDER BY updated DESC,id DESC LIMIT 51 OFFSET ?""")
+    missing = []
+    if error and request.form.get("action") == "next":
+        missing = [key for key in BY_STEP[step] if key in REQUIRED and not data.get(key)]
     result = None
     try:
         result = assess(data)
@@ -253,7 +256,7 @@ def wizard(row, data, step, error=None):
     return render_template(
         "threats/edit.html",
         row=row,
-        rows=rows,
+        history=history,
         data=data,
         fields=FIELDS,
         labels=LABELS,
@@ -263,6 +266,7 @@ def wizard(row, data, step, error=None):
         step=step,
         catalog=CAT,
         error=error,
+        missing=missing,
         consequences=CONSEQUENCES,
         recommendations=profile(data),
         choices=CONCLUSIONS,

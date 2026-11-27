@@ -3,6 +3,7 @@ from contextlib import closing, contextmanager
 import fcntl
 import hashlib
 import hmac
+import io
 import json
 import logging
 import os
@@ -255,6 +256,8 @@ def create_batch():
 
 def batch(batch_id):
     info = owned_batch(batch_id)
+    if request.method == "HEAD":
+        return ""
     db = get_db()
     counts = {row["state"]: row["n"] for row in db.execute(
         "SELECT state,count(*) AS n FROM redaction_batch_files WHERE batch_id=? GROUP BY state", (batch_id,))}
@@ -266,7 +269,8 @@ def batch(batch_id):
     files = db.execute("""SELECT ordinal,ext,state,error,replacements,warnings FROM redaction_batch_files
                           WHERE batch_id=? AND ordinal>? ORDER BY ordinal LIMIT ?""",
                        (batch_id,(page-1)*PAGE_SIZE,PAGE_SIZE)).fetchall()
-    return render_template("redaction/batch.html", batch=info, counts=counts, legacy=legacy, total=total, states=STATES,
+    template = "redaction/batch_results.html" if request.headers.get("X-IS-Fragment") == "batch-results" else "redaction/batch.html"
+    return render_template(template, batch=info, counts=counts, legacy=legacy, total=total, states=STATES,
                            errors=ERRORS, files=files, page=page, last_page=last_page, formats=SUPPORTED,
                            limit=BATCH_MAX_BYTES, nonce=secrets.token_hex(16))
 
@@ -341,10 +345,9 @@ def receive_file(batch_id):
         ext, declared = metadata["ext"].lower(), metadata["size"]
         stream = None
     error = "extension" if ext not in SUPPORTED else "size" if declared and declared>BATCH_MAX_BYTES else ""
-    if stream is None and not error:
-        abort(400,description="Для обработки требуется содержимое файла.")
     ext = ext if ext in SUPPORTED else ""
     secret = current_app.secret_key
+    assert secret is not None  # Required by create_app.
     mac = hmac.new(secret.encode() if isinstance(secret,str) else secret, f"batch:{batch_id}\0".encode(), hashlib.sha256)
     with spool(current_app.config["DATA_DIR"]) as directory:
         token = secrets.token_hex(16)
@@ -352,6 +355,8 @@ def receive_file(batch_id):
         keep = created = False
         try:
             if not error:
+                if stream is None:
+                    abort(400,description="Для обработки требуется содержимое файла.")
                 size = 0
                 with os.fdopen(os.open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600),"wb") as out:
                     created = True
@@ -396,7 +401,7 @@ def batch_download(batch_id, ordinal):
                     headers={"Content-Disposition":f'attachment; filename="redacted-{ordinal:06d}.txt"'})
 
 
-class ZipBuffer:
+class ZipBuffer(io.RawIOBase):
     def __init__(self):
         self.data = bytearray()
 

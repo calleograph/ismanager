@@ -11,6 +11,7 @@ from flask import (
 
 from .asr_store import init_db, model_status, source_path
 from .db import get_db
+from .personal_history import history_page
 from .telemetry import public_counters, worker_info
 
 bp = Blueprint("transcription", __name__, url_prefix="/transcription")
@@ -43,7 +44,7 @@ def index():
     db = get_db()
     if request.method == "POST":
         media = request.files.get("media")
-        if not media or not media.filename.strip():
+        if media is None or not media.filename or not media.filename.strip():
             flash("Выберите аудио- или видеофайл.", "error")
             return redirect(url_for(".index"))
         name = media.filename.replace("\\", "/").split("/")[-1].strip()[:200]
@@ -73,9 +74,9 @@ def index():
             return {"location": location}, 201
         return redirect(location)
 
-    jobs = db.execute("SELECT id,filename,status,created FROM transcripts WHERE owner=? ORDER BY rowid DESC",
-                      (g.user["id"],)).fetchall()
-    return render_template("transcription/index.html", jobs=jobs, status=STATUS,
+    history = history_page("""SELECT id,filename,status,created FROM transcripts
+        WHERE owner=? AND instr(casefold(filename),?)>0 ORDER BY rowid DESC LIMIT 51 OFFSET ?""")
+    return render_template("transcription/index.html", history=history, status=STATUS,
                            model_status=model_status(_data()))
 
 

@@ -1,22 +1,25 @@
-{% extends 'base.html' %}
+{% extends 'admin_layout.html' %}
+{% from 'admin_lists.html' import pages %}
 {% block title %}Ресурсы хранения{% endblock %}
-{% block content %}
-<a href="{{ url_for('admin.index') }}">Администрирование</a>
+{% block admin_content %}
+
 <h1>Ресурсы хранения</h1>
 <section class="panel">
   <div class="actions">
     <a class="btn" href="{{ url_for('admin.storage_edit', kind='local') }}">Добавить локальную папку</a>
     <a class="btn secondary" href="{{ url_for('admin.storage_edit', kind='smb') }}">Добавить ресурс SMB</a>
   </div>
+  <form class="admin-filter" method="get"><label>Поиск ресурсов<input type="search" name="q" value="{{ query }}" maxlength="256" placeholder="Название, папка или сервер"></label><button>Найти</button>{% if query %}<a href="{{ url_for('admin.storage') }}">Сбросить</a>{% endif %}</form>
   {% if resources %}
-  <table><thead><tr><th>Ресурс</th><th>Тип</th><th>Папка</th></tr></thead>
+  <table class="admin-records"><thead><tr><th>Ресурс</th><th>Тип</th><th>Папка</th></tr></thead>
     <tbody>{% for item in resources %}
-    <tr><td><a href="{{ url_for('admin.storage_edit', resource_id=item.id) }}">{{ item.name }}</a></td>
-      <td>{{ 'SMB' if item.kind == 'smb' else 'Локальная папка' }}</td>
-      <td><code>{% if item.kind == 'smb' %}//{{ item.server }}/{{ item.share }}/{% endif %}{{ item.path }}</code></td></tr>
+    <tr><td><a href="{{ url_for('admin.storage_edit',resource_id=item.id,q=query or none,page=page if page>1 else none) }}">{{ item.name }}</a></td>
+      <td data-label="Тип">{{ 'SMB' if item.kind == 'smb' else 'Локальная папка' }}</td>
+      <td data-label="Папка"><code>{% if item.kind == 'smb' %}//{{ item.server }}/{{ item.share }}/{% endif %}{{ item.path }}</code></td></tr>
     {% endfor %}</tbody>
   </table>
-  {% else %}<p>Добавьте входную папку или папку для сохранения обработанных текстов.</p>{% endif %}
+  {% elif query or page>1 %}<p role="status">Ресурсы не найдены.</p>{% else %}<p>Добавьте входную папку или папку для сохранения обработанных текстов.</p>{% endif %}
+{{ pages(page,more,'admin.storage',query) }}
 </section>
 <a href="{{ url_for('admin.watches') }}">Наблюдение за папками</a>
 {% endblock %}

@@ -20,7 +20,7 @@ class RecordingTests(unittest.TestCase):
         self.app = Flask(__name__)
         self.app.config.update(DATA_DIR=self.folder, DATABASE=self.folder / "queue.sqlite3",
                                SECRET_KEY="test", TESTING=True)
-        self.app.jinja_loader = DictLoader({"base.html": "{% block content %}{% endblock %}"})
+        self.app.jinja_loader = DictLoader({"base.html": "{% macro icon(name) %}{% endmacro %}{% block content %}{% endblock %}"})
         self.app.jinja_env.globals["csrf_token"] = lambda: "test"
         self.app.register_blueprint(transcription.bp)
         # The production package supplies the templates and global authentication.
@@ -69,6 +69,19 @@ class RecordingTests(unittest.TestCase):
         self.assertIn("Исходный текст.", self.client.get(page).get_data(as_text=True))
         self.assertEqual(self.client.post(page + "/delete").status_code, 302)
         self.assertFalse(asr_store.source_path(self.folder, job_id).exists())
+
+    def test_history_search_paginates_only_owner_recordings(self):
+        with self.db:
+            self.db.executemany("INSERT INTO transcripts(id,owner,filename) VALUES (?,?,?)",
+                                [(f"record-{i}", 1, f"Запись {i}") for i in range(52)] +
+                                [("private", 2, "Запись другого пользователя")])
+        first = self.client.get("/transcription/?q=зАпИсЬ").text
+        second = self.client.get("/transcription/?q=запись&page=2").text
+        self.assertIn("Следующие 50", first)
+        self.assertNotIn("Запись 0<", first)
+        self.assertIn("Запись 0<", second)
+        self.assertNotIn("другого пользователя", first + second)
+        self.assertIn("не найдено", self.client.get("/transcription/?q=никаких").text)
 
     def test_zero_byte_upload_and_size_limit(self):
         self.upload(b"")
