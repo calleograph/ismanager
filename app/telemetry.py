@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import threading
 import time
+from functools import cache
 from importlib import metadata
 from pathlib import Path
 
@@ -62,7 +63,7 @@ def cgroup_directory():
     return root
 
 
-def sample(directory, previous=None):
+def cpu_cores(directory):
     try:
         cores = len(os.sched_getaffinity(0))
     except (AttributeError, OSError):
@@ -70,6 +71,17 @@ def sample(directory, previous=None):
     quota = read(directory / "cpu.max").split()
     if len(quota) == 2 and quota[0].isdigit() and int(quota[1]) > 0:
         cores = min(cores, int(quota[0]) / int(quota[1]))
+    return cores
+
+
+def asr_threads(directory):
+    configured = os.getenv("ASR_THREADS") or os.getenv("OMP_NUM_THREADS")
+    limit = int(configured) if configured and configured.isdecimal() else 4
+    return max(1, min(limit, int(cpu_cores(directory))))
+
+
+def sample(directory, previous=None):
+    cores = cpu_cores(directory)
     cpu = dict(line.split() for line in read(directory / "cpu.stat").splitlines())
     counter = int(cpu["usage_usec"]) / 1e6 if "usage_usec" in cpu else time.process_time()
     now = time.monotonic()
@@ -102,13 +114,14 @@ def versions(packages):
 def publish_worker(data_dir):
     directory = cgroup_directory()
     components = versions({"PyTorch": "torch", "GigaAM": "gigaam", "Silero VAD": "silero-vad"})
+    threads = asr_threads(directory)
     previous = None
     while True:
         try:
             counters, previous = sample(directory, previous)
             info = {"time": time.time(), "resources": counters, "components": components,
                     "host_cpu": host_cpu(),
-                    "device": os.getenv("ASR_DEVICE", "cpu"), "threads": int(os.getenv("OMP_NUM_THREADS", "2"))}
+                    "device": os.getenv("ASR_DEVICE", "cpu"), "threads": threads}
             tmp = data_dir / "asr-resources.tmp"
             tmp.write_text(json.dumps(info))
             tmp.replace(data_dir / "asr-resources.json")
@@ -141,15 +154,23 @@ def admin_counters(data_dir, worker=None):
                 worker=public_counters(worker))
 
 
-def system_info(data_dir):
-    from . import asr_store
-
-    worker = worker_info(data_dir)
-    cpu = next((line.partition(":")[2].strip() for line in read(Path("/proc/cpuinfo")).splitlines()
-                if line.startswith("model name")), None)
-    disk = shutil.disk_usage(data_dir)
+@cache
+def server_details():
+    cpu = None
+    try:
+        with Path("/proc/cpuinfo").open() as info:
+            cpu = next((line.partition(":")[2].strip() for line in info if line.startswith("model name")), None)
+    except OSError:
+        pass
     packages = versions({"Flask": "flask", "Gunicorn": "gunicorn"})
     packages.update({"Python": platform.python_version(), "SQLite": sqlite3.sqlite_version})
+    return cpu, packages
+
+
+def system_info(data_dir):
+    worker = worker_info(data_dir)
+    cpu, packages = server_details()
+    disk = shutil.disk_usage(data_dir)
     return dict(cpu=cpu, live=admin_counters(data_dir, worker),
                 kernel=platform.release(), arch=platform.machine(), disk_free=disk.free // MIB, disk_total=disk.total // MIB,
-                components=packages | worker.get("components", {}), worker=worker, model=asr_store.model_status(data_dir))
+                components=packages | worker.get("components", {}), worker=worker)

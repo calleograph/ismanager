@@ -115,14 +115,13 @@ def same_route(first, second):
         "kind", "input_resource", "input_folder", "output_resource", "output_folder"))
 
 
-def observe_one(db, rule, snap, now, interval):
-    stamp = signature(snap)
+def observe_one(db, rule, name, stamp, now, interval):
     item = db.execute("""SELECT id,stamp,state,replaced,seen_since,output_stamp FROM watch_files
-                         WHERE rule_id=? AND name=?""", (rule["id"], snap.name)).fetchone()
+                         WHERE rule_id=? AND name=?""", (rule["id"], name)).fetchone()
     if item is None:
-        filename, key = output_slot(db, rule, snap.name)
+        filename, key = output_slot(db, rule, name)
         db.execute("""INSERT INTO watch_files(rule_id,name,stamp,seen_since,updated,output_name,output_key)
-                      VALUES (?,?,?,?,?,?,?)""", (rule["id"], snap.name, stamp, now, now, filename, key))
+                      VALUES (?,?,?,?,?,?,?)""", (rule["id"], name, stamp, now, now, filename, key))
     elif item["stamp"] != stamp or item["state"] == "missing":
         replaced = item["replaced"] or item["output_stamp"] or item["state"] in {"existing", "conflict"}
         db.execute("""UPDATE watch_files SET stamp=?,state='settling',seen_since=?,updated=?,
@@ -141,15 +140,33 @@ def batches(items):
 def observe(db, rule, snapshots, now, interval):
     snapshots.sort(key=lambda file: file.name)
     seen = {snap.name for snap in snapshots}
+    if not same_route(rule, current_rule(db, rule["id"])):
+        return
     for batch in batches(snapshots):
+        placeholders = ",".join("?" for _ in batch)
+        existing = {
+            row["name"]: row for row in db.execute(
+                f"SELECT name,stamp,state,seen_since FROM watch_files WHERE rule_id=? AND name IN ({placeholders})",
+                (rule["id"], *(snap.name for snap in batch)),
+            )
+        }
+        changed = []
+        for snap in batch:
+            stamp = signature(snap)
+            row = existing.get(snap.name)
+            if (row is None or row["stamp"] != stamp or row["state"] == "missing"
+                    or (row["state"] == "settling" and now - row["seen_since"] >= interval)):
+                changed.append((snap.name, stamp))
+        if not changed:
+            continue
         with db:
             # Release SQLite's single writer between batches in large archives.
             db.execute("BEGIN IMMEDIATE")
             current = current_rule(db, rule["id"])
             if not same_route(rule, current):
                 return
-            for snap in batch:
-                observe_one(db, current, snap, now, interval)
+            for name, stamp in changed:
+                observe_one(db, current, name, stamp, now, interval)
     rows = db.execute("""SELECT id,name FROM watch_files WHERE rule_id=?
                          AND state IN ('settling','queued','failed','existing')""", (rule["id"],))
     missing = [row["id"] for row in rows if row["name"] not in seen]
@@ -449,11 +466,15 @@ def publish(db, item, rule, secret, root, now):
 
 def work(db, data_dir, engine, secret, root=None, *, now=None, kind="transcription"):
     now = int(time.time()) if now is None else now
+    available = """
+        FROM watch_files f JOIN watch_rules r ON r.id=f.rule_id
+        WHERE r.enabled AND r.kind=? AND f.state IN ('publishing','queued') AND f.retry_at<=?
+    """
+    if not db.execute("SELECT 1 " + available + " LIMIT 1", (kind, now)).fetchone():
+        return False
     with db:
         db.execute("BEGIN IMMEDIATE")
-        item = db.execute("""SELECT f.* FROM watch_files f JOIN watch_rules r ON r.id=f.rule_id
-                             WHERE r.enabled AND r.kind=? AND f.state IN ('publishing','queued') AND f.retry_at<=?
-                             ORDER BY f.updated,f.id LIMIT 1""", (kind, now)).fetchone()
+        item = db.execute("SELECT f.* " + available + " ORDER BY f.updated,f.id LIMIT 1", (kind, now)).fetchone()
         if item is None:
             return False
         if item["state"] == "queued":

@@ -30,6 +30,24 @@ def test_public_telemetry_excludes_system_details_and_expires(tmp_path):
     assert telemetry.worker_info(tmp_path) == {}
 
 
+def test_asr_threads_respect_affinity_quota_and_settings(tmp_path, monkeypatch):
+    monkeypatch.delenv("ASR_THREADS", raising=False)
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    monkeypatch.setattr(telemetry.os, "sched_getaffinity", lambda pid: set(range(8)))
+    assert telemetry.asr_threads(tmp_path) == 4
+    monkeypatch.setenv("OMP_NUM_THREADS", "3")
+    assert telemetry.asr_threads(tmp_path) == 3
+    monkeypatch.setenv("ASR_THREADS", "6")
+    assert telemetry.asr_threads(tmp_path) == 6
+    (tmp_path / "cpu.max").write_text("250000 100000")
+    assert telemetry.asr_threads(tmp_path) == 2
+    (tmp_path / "cpu.max").write_text("50000 100000")
+    assert telemetry.asr_threads(tmp_path) == 1
+    (tmp_path / "cpu.max").write_text("max 100000")
+    monkeypatch.setattr(telemetry.os, "sched_getaffinity", lambda pid: {0, 1})
+    assert telemetry.asr_threads(tmp_path) == 2
+
+
 def test_host_cpu_and_worker_cpu_use_distinct_denominators(monkeypatch):
     readings = iter(["cpu  4 1 2 80 10 1 1 1 2 0", "cpu  8 1 4 92 11 2 1 1 4 0"])
     monkeypatch.setattr(telemetry, "read", lambda path: next(readings))

@@ -11,6 +11,7 @@ import re
 import threading
 from functools import lru_cache
 from dataclasses import dataclass, field
+from bisect import bisect_left, bisect_right
 from pathlib import Path
 
 NLP_DIR = Path(os.environ.get("PRIVACY_NLP_DIR", "/opt/nlp"))
@@ -410,14 +411,18 @@ def name_is_top(word: str) -> bool:
 
 def _extend_people(text: str, spans: list[Span], m) -> list[Span]:
     words = [(t.start(), t.end(), t.group(0)) for t in _TOKEN.finditer(text)]
-    taken = [(s.start, s.end) for s in spans]
-
-    def inside(a: int, b: int) -> bool:
-        return any(x <= a and b <= y for x, y in taken)
+    starts = [w[0] for w in words]
+    ends = [w[1] for w in words]
+    taken = iter(sorted(spans, key=lambda s: s.start))
+    pending = next(taken, None)
+    covered_end = 0
 
     res = list(spans)
     for ws, we, w in words:                                  # 1. одиночные фамилии/имена, пропущенные NER (до присоединения соседей)
-        if inside(ws, we) or _INITIAL.match(w):
+        while pending is not None and pending.start <= ws:
+            covered_end = max(covered_end, pending.end)
+            pending = next(taken, None)
+        if we <= covered_end or _INITIAL.match(w):
             continue
         prev = text[max(0, ws - 2):ws]
         if ws == 0 or re.search(r"[.!?\n:]\s*$", text[max(0, ws - 3):ws]) or prev.endswith("«"):
@@ -430,16 +435,14 @@ def _extend_people(text: str, spans: list[Span], m) -> list[Span]:
         if s.kind != "PER":
             continue
         a, b = s.start, s.end
-        for ws, we, w in words:                               # вправо
-            if ws < b:
-                continue
+        for word in range(bisect_left(starts, b), len(words)): # вправо
+            ws, we, w = words[word]
             if text[b:ws].strip(" ") == "" and "\n" not in text[b:ws] and _name_like(w, m):
                 b = we
             else:
                 break
-        for ws, we, w in reversed(words):                     # влево
-            if we > a:
-                continue
+        for word in range(bisect_right(ends, a) - 1, -1, -1): # влево
+            ws, we, w = words[word]
             if text[we:a].strip(" ") == "" and "\n" not in text[we:a] and _name_like(w, m):
                 a = ws
             else:

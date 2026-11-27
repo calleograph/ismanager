@@ -54,6 +54,7 @@ def context(text, start, end, span=0):
 
 def find(text, *, secrets_only=False):
     mask_starts = [m.start() for m in re.finditer(re.escape(MASK), text)]
+    lower_text = text.lower()
     for rule in rules():
         is_secret = "type" in rule
         rep = rule["replacement"]
@@ -61,6 +62,11 @@ def find(text, *, secrets_only=False):
         if is_secret:
             cat = "login" if rep == "connection_username" else "secret"
         if secrets_only and cat != "secret":
+            continue
+        positive = rule.get("context_keywords", rule.get("keywords", []))
+        companion = rule.get("companion_pattern")
+        # A positive keyword in the local context must also occur in the source.
+        if positive and not companion and not any(k.lower() in lower_text for k in positive):
             continue
         for match in rule["pattern"].finditer(text, timeout=1.5):
             group = rule.get("value_group", int(is_secret))
@@ -93,9 +99,7 @@ def find(text, *, secrets_only=False):
                 continue
             span = rule.get("context_line_span", 0)
             nearby = context(text, start, end, span).lower() if span else line.lower()
-            positive = rule.get("context_keywords", rule.get("keywords", []))
             if positive and not any(k.lower() in nearby for k in positive):
-                companion = rule.get("companion_pattern")
                 if not companion or not companion.search(line, timeout=.2):
                     continue
             if any(k.lower() in line.lower() for k in rule.get("context_negative_keywords", [])):

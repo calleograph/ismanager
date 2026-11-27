@@ -173,6 +173,7 @@ def watches():
                COUNT(f.id) FILTER (WHERE f.state IN ('failed','conflict','missing')
                                    OR (f.state IN ('queued','publishing') AND f.error!='')) AS errors
         FROM selected r LEFT JOIN watch_files f ON f.rule_id=r.id
+            AND f.state IN ('settling','queued','running','publishing','failed','conflict','missing')
         GROUP BY r.id ORDER BY r.name,r.id""", (kind, kind, query.casefold(), (page-1)*50)).fetchall()
     return render_template("watch/rules.html", rules=rows[:50], kinds=KINDS, kind=kind,
                            query=query, page=page, more=len(rows)>50)

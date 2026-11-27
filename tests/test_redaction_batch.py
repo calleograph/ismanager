@@ -44,6 +44,20 @@ def upload(client, where, csrf, content, *, key=None, ext="txt"):
                        headers={"X-CSRF-Token":csrf,"X-Upload-Key":key or secrets.token_hex(16)})
 
 
+def test_idle_batch_poll_uses_only_reads(setup):
+    app, _, _, root = setup
+    with app.app_context():
+        db = get_db()
+        statements = []
+        db.set_trace_callback(statements.append)
+        try:
+            assert not jobs.work(db, root)
+        finally:
+            db.set_trace_callback(None)
+        assert statements and all(query.startswith("SELECT") for query in statements)
+        assert not (root / "redaction-batch" / ".lock").exists()
+
+
 def test_native_batch_form_needs_a_file_and_accepts_the_first_document(setup):
     app, client, _, _ = setup
     csrf = token(client.get("/redaction/"))

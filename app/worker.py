@@ -91,11 +91,12 @@ def load_engine(directory):
     import gigaam
     import torch
     from silero_vad import load_silero_vad
+    from .telemetry import asr_threads, cgroup_directory
 
     device = os.getenv("ASR_DEVICE", "cpu")
     if device not in {"cpu", "cuda"} or (device == "cuda" and not torch.cuda.is_available()):
         raise RuntimeError("Проверьте ASR_DEVICE и доступность ускорителя")
-    torch.set_num_threads(max(1, int(os.getenv("OMP_NUM_THREADS", "2"))))
+    torch.set_num_threads(asr_threads(cgroup_directory()))
     # NNPACK requires larger batches; probing it on every convolution floods logs on some CPUs.
     torch.backends.nnpack.set_flags(False)
     vad = load_silero_vad(onnx=True)

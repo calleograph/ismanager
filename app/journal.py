@@ -54,10 +54,7 @@ def entries(event, user, limit, before=None, after=None, account=None):
     query = ""
     conditions = []
     values: list[str | int] = []
-    if account:
-        conditions.append("(a.actor=? OR a.target_user=?)")
-        values.extend((account, account))
-    elif user:
+    if user and not account:
         query = "WITH matches AS (SELECT id FROM users WHERE instr(casefold(username || ' ' || display_name), ?) > 0) "
         values.append(user.casefold())
         conditions.append("(a.actor IN matches OR a.target_user IN matches)")
@@ -70,11 +67,23 @@ def entries(event, user, limit, before=None, after=None, account=None):
     if after:
         conditions.append("a.id > ?")
         values.append(after)
+    order = "ASC" if after else "DESC"
+    if account:
+        # Keep the seek and LIMIT on both exact-account indexes before merging.
+        predicates = "".join(" AND " + item for item in conditions)
+        query = f"""WITH actor_matches AS (
+                SELECT id FROM audit a WHERE actor=?{predicates} ORDER BY id {order} LIMIT ?
+            ), target_matches AS (
+                SELECT id FROM audit a WHERE target_user=?{predicates} ORDER BY id {order} LIMIT ?
+            ), matches AS (SELECT id FROM actor_matches UNION SELECT id FROM target_matches) """
+        values = [account, *values, limit] * 2
     query += """SELECT a.id,a.time,a.event,actor.username AS actor,target.username AS target
         FROM audit a LEFT JOIN users actor ON a.actor=actor.id LEFT JOIN users target ON a.target_user=target.id"""
-    if conditions:
+    if account:
+        query += " JOIN matches m ON m.id=a.id"
+    elif conditions:
         query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY a.id " + ("ASC" if after else "DESC") + " LIMIT ?"
+    query += f" ORDER BY a.id {order} LIMIT ?"
     return get_db().execute(query, (*values, limit)).fetchall()
 
 
@@ -91,7 +100,13 @@ def index():
     rows = records[:50]
     if after:
         rows.reverse()
-    choices = [r[0] for r in get_db().execute("SELECT DISTINCT event FROM audit")]
+    # Seek to each next code in audit_event instead of reading every repeated code.
+    choices = [r[0] for r in get_db().execute("""WITH RECURSIVE codes(event) AS (
+        SELECT min(event) FROM audit
+        UNION ALL
+        SELECT (SELECT event FROM audit WHERE event>codes.event ORDER BY event LIMIT 1)
+        FROM codes WHERE event IS NOT NULL
+    ) SELECT event FROM codes WHERE event IS NOT NULL""")]
     if event and event not in choices:
         choices.append(event)
     return render_template("journal.html", entries=rows, event=event, user=user, account=account, selected=selected,

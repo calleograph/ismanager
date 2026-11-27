@@ -184,14 +184,20 @@ def failure(error):
 
 
 def work(db, data_dir):
+    queue = "SELECT id FROM redaction_batch_files WHERE state='queued' ORDER BY id LIMIT 1"
+    cleanup = """SELECT id,source FROM redaction_batch_files
+                 WHERE source IS NOT NULL AND state IN ('done','failed') ORDER BY id LIMIT 1"""
+    queued = db.execute(queue).fetchone()
+    if not queued and not db.execute(cleanup).fetchone():
+        return False
     with spool(data_dir) as directory:
-        with db:
-            item = db.execute("""UPDATE redaction_batch_files SET state='running',attempts=attempts+1
-                WHERE id=(SELECT id FROM redaction_batch_files WHERE state='queued' ORDER BY id LIMIT 1)
-                RETURNING id,ext,source""").fetchone()
+        item = None
+        if queued:
+            with db:
+                item = db.execute(f"""UPDATE redaction_batch_files SET state='running',attempts=attempts+1
+                    WHERE id=({queue}) RETURNING id,ext,source""").fetchone()
         if item is None:
-            pending = db.execute("""SELECT id,source FROM redaction_batch_files
-                WHERE source IS NOT NULL AND state IN ('done','failed') ORDER BY id LIMIT 1""").fetchone()
+            pending = db.execute(cleanup).fetchone()
             if pending and remove_input(directory,pending["source"]):
                 with db:
                     db.execute("UPDATE redaction_batch_files SET source=NULL WHERE id=? AND source=?", (pending["id"],pending["source"]))

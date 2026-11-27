@@ -331,3 +331,13 @@ class FolderWatchTests(unittest.TestCase):
         self.db.set_trace_callback(None)
         self.assertEqual(sum(inserted), 400)
         self.assertLess(max(inserted), 400)
+        self.clock += watch.INTERVAL
+        watch.observe(self.db, rule, snapshots, self.clock, watch.INTERVAL)
+        writes = []
+        self.db.set_trace_callback(lambda sql: writes.append(sql) if sql.startswith("BEGIN IMMEDIATE") else None)
+        try:
+            watch.observe(self.db, rule, snapshots, self.clock + watch.INTERVAL, watch.INTERVAL)
+        finally:
+            self.db.set_trace_callback(None)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM watch_files WHERE state='queued'").fetchone()[0], 400)
+        self.assertFalse(writes)

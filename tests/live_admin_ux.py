@@ -105,6 +105,24 @@ def check_maintenance(page, origin, operations):
     assert len(polls) == 1 and not navigation
 
 
+def check_system_polling(page, origin):
+    requests = []
+    page.on("request", lambda req: requests.append(req.url) if req.url.endswith("/admin/system-metrics") else None)
+    page.clock.install()
+    page.goto(origin + "/admin/")
+    page.clock.run_for(6100)
+    assert not requests
+    summary = page.locator("#technical summary")
+    summary.click()
+    with page.expect_response("**/admin/system-metrics") as update:
+        page.clock.run_for(3100)
+    assert update.value.ok
+    summary.click()
+    completed = len(requests)
+    page.clock.run_for(6100)
+    assert len(requests) == completed
+
+
 def run(directory):
     app = create_app(dict(DATA_DIR=directory, SECRET_KEY=secrets.token_hex(32), ACCESS_MODE="http"))
     password = app.test_cli_runner().invoke(args=["admin-password"]).output.strip()
@@ -130,6 +148,8 @@ def run(directory):
             check_bookmark(page, origin, password)
             check_folder_form(page)
             check_maintenance(page, origin, operations)
+            with browser.new_context(storage_state=page.context.storage_state()) as metrics:
+                check_system_polling(metrics.new_page(), origin)
             plain = browser.new_context(java_script_enabled=False, storage_state=page.context.storage_state())
             native = plain.new_page()
             native.goto(origin + "/admin/")
@@ -152,4 +172,4 @@ def run(directory):
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, CONTROL_DIR=directory):
         run(directory)
-    print("Admin bookmark, unsaved choices, interrupted search and maintenance confirmations passed.")
+    print("Admin bookmark, unsaved choices, interrupted search, maintenance confirmations and metrics polling passed.")

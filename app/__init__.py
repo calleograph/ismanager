@@ -142,18 +142,23 @@ def create_app(config=None):
 
     @app.get("/healthz")
     def health():
-        db.get_db().execute("SELECT count(*) FROM users").fetchone()
+        db.get_db().execute("SELECT 1 FROM users LIMIT 1").fetchone()
         return {"status": "ok", "version": app.config["VERSION"]}
 
     @app.get("/")
     def dashboard():
+        # Bound each history before merging, even when many rows share a timestamp.
         recent = db.get_db().execute("""
-            SELECT 'transcript' AS kind, id, filename AS title, created AS stamp, NULL AS stage FROM transcripts WHERE owner=?
-            UNION ALL SELECT 'redaction', id, 'Обезличивание №' || id, created, NULL FROM redactions WHERE user_id=?
-            UNION ALL SELECT 'batch', id, 'Пакет № ' || id, created, NULL FROM redaction_batches WHERE owner=?
-            UNION ALL SELECT 'threat', id, name, updated, stage FROM threat_models WHERE owner=?
+            SELECT 'transcript' AS kind, id, filename AS title, created AS stamp, NULL AS stage
+                FROM (SELECT id,filename,created FROM transcripts WHERE owner=:owner ORDER BY created DESC,id DESC LIMIT 6)
+            UNION ALL SELECT 'redaction', id, 'Обезличивание №' || id, created, NULL
+                FROM (SELECT id,created FROM redactions WHERE user_id=:owner ORDER BY created DESC,id DESC LIMIT 6)
+            UNION ALL SELECT 'batch', id, 'Пакет № ' || id, created, NULL
+                FROM (SELECT id,created FROM redaction_batches WHERE owner=:owner ORDER BY created DESC,id DESC LIMIT 6)
+            UNION ALL SELECT 'threat', id, name, updated, stage
+                FROM (SELECT id,name,updated,stage FROM threat_models WHERE owner=:owner ORDER BY updated DESC,id DESC LIMIT 6)
             ORDER BY stamp DESC, kind, id DESC LIMIT 6
-        """, (g.user["id"],) * 4).fetchall()
+        """, {"owner": g.user["id"]}).fetchall()
         return render_template("home.html", recent=recent)
 
     @app.errorhandler(HTTPException)

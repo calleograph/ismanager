@@ -115,7 +115,15 @@ def test_processing_state_retry_and_edit_guards(setup):
         assert db.execute("SELECT last_scan FROM watch_rules WHERE id=?", (rule_id,)).fetchone()[0] == 0
         assert db.execute("SELECT state FROM watch_files WHERE id=?", (file_id,)).fetchone()[0] == "queued"
         db.execute("UPDATE watch_files SET state='running' WHERE id=?", (file_id,))
+        db.executemany("""
+            INSERT INTO watch_files(rule_id,name,stamp,state,seen_since,updated,output_name,output_key,error)
+            VALUES(?, ?, 'fixture', ?, 1, 1, 'text.txt', ?, ?)
+        """, ((rule_id, state, state, f"key-{state}", error) for state, error in [
+            ("done", ""), ("existing", ""), ("publishing", "retry"), ("missing", "offline"), ("settling", ""),
+        ]))
         db.commit()
+    summary = client.get("/admin/watches/").text
+    assert '<td data-label="В работе">3</td><td data-label="Ошибки">2</td>' in summary
     assert post(route, action="delete").status_code == 400
     assert "Распознаётся" in client.get(route).get_data(as_text=True)
     with app.app_context():

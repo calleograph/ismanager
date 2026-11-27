@@ -8,7 +8,7 @@ from unittest.mock import patch
 from flask import Flask, g
 from jinja2 import DictLoader
 
-from app import asr_store, transcription, worker
+from app import asr_store, folder_watch, transcription, worker
 from app.db import close_db, get_db
 
 
@@ -119,6 +119,16 @@ class RecordingTests(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT status FROM transcripts").fetchone()[0], "failed")
         self.assertEqual(self.client.post(page + "/retry").status_code, 302)
         self.assertEqual(self.db.execute("SELECT recoveries FROM transcripts").fetchone()[0], 0)
+
+    def test_idle_worker_reads_queue_while_another_connection_writes(self):
+        with sqlite3.connect(self.app.config["DATABASE"], timeout=0) as polling:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                self.assertFalse(worker.work(polling, self.folder, None))
+                for kind in ("transcription", "redaction"):
+                    self.assertFalse(folder_watch.work(polling, self.folder, None, "", kind=kind))
+            finally:
+                self.db.rollback()
 
     def test_model_cache_accepts_only_pinned_contents(self):
         import hashlib

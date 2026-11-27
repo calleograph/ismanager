@@ -4,7 +4,7 @@ if (systemPanel) {
   const write = (name, value) => { systemPanel.querySelector("[data-" + name + "]").textContent = value; };
   const missing = "Нет свежих данных";
   const update = async () => {
-    if (!document.hidden) {
+    if (systemPanel.open && !document.hidden) {
       try {
         const response = await fetch(systemPanel.dataset.systemMetrics, {cache: "no-store"});
         if (!response.ok || response.redirected) throw new Error();

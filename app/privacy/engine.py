@@ -339,15 +339,17 @@ class Anonymizer:
                     cands.append((Found(s0, e0, "person", "name_caps"), "PER"))
         cands.sort(key=lambda c: (-PRIORITY.get(c[0].category, 0), -(c[0].end - c[0].start), c[0].start))
         taken: list[tuple[Found, str]] = []
+        occupied = bytearray(len(text))
         for f, k in cands:
             if f.start >= f.end or self.policy.action(f.category) == "keep":
                 continue
             if f.category != "secret" and self._is_exception(text, f.start, f.end):
                 continue
-            if any(f.start < g.end and g.start < f.end for g, _ in taken):
+            if occupied.find(b"\x01", f.start, f.end) != -1:
                 continue
             taken.append((f, k))
-        taken += self._repeats(text, taken)
+            occupied[f.start:f.end] = b"\x01" * (f.end - f.start)
+        taken += self._repeats(text, taken, occupied)
         return sorted(taken, key=lambda c: c[0].start)
 
     def _people(self, text: str, spans: list[tuple[int, int]], lower: bool = False) -> list[Found]:
@@ -472,21 +474,23 @@ class Anonymizer:
                 return (int(m.group(d)), mon, year) if 1 <= int(m.group(d)) <= 31 and 1 <= mon <= 12 else None
         return None
 
-    def _repeats(self, text: str, taken: list[tuple[Found, str]]) -> list[tuple[Found, str]]:
+    def _repeats(self, text: str, taken: list[tuple[Found, str]], occupied: bytearray) -> list[tuple[Found, str]]:
         """Значение, найденное в одном месте, заменяется везде, где оно повторяется без подсказки (таблица, CSV, пересказ);
         дата сразу после ФИО — дата рождения («Петрова Е.А., 07.11.1992»)."""
-        busy = [(f.start, f.end) for f, _ in taken]
-        free = lambda s, e: not any(s < b and a < e for a, b in busy)          # noqa: E731
+        def claim(start: int, end: int) -> bool:
+            if occupied.find(b"\x01", start, end) != -1:
+                return False
+            occupied[start:end] = b"\x01" * (end - start)
+            return True
         out: list[tuple[Found, str]] = []
         dates = [(m, self._date_key(m)) for m in self._DATE.finditer(text)]
         births = {k for m, k in dates if k and any(f.rule in ("birth_date", "issue_details") and f.start <= m.start() < f.end for f, _ in taken)}
         for m, k in dates:                       # та же дата рождения в другой записи (17/04/1986, 17041986, 17 апреля 1986) и дата сразу после ФИО
-            if not k or not free(m.start(), m.end()):
+            if not k or occupied.find(b"\x01", m.start(), m.end()) != -1:
                 continue
             near = k[2] <= 2012 and any(f.category == "person" and 0 <= m.start() - f.end <= 4 and re.fullmatch(r"[\s,;.]*", text[f.end:m.start()]) for f, _ in taken)
-            if k in births or near:
+            if (k in births or near) and claim(m.start(), m.end()):
                 out.append((Found(m.start(), m.end(), "id_number", "birth_date_repeat" if k in births else "birth_date_near_person"), ""))
-                busy.append((m.start(), m.end()))
         values = {text[f.start:f.end]: f.category for f, _ in taken if f.category not in ("person", "organization", "location", "money", "marker")}
         for f, _ in taken:                       # локальную часть адреса почты учитываем в последующих упоминаниях логина
             local = text[f.start:f.end].split("@")[0].strip() if f.category == "email" else ""
@@ -495,17 +499,15 @@ class Anonymizer:
         for v, cat in list(values.items()):
             if cat == "login":                   # значение после известного логина в паре через двоеточие или косую черту
                 for m in re.finditer(re.escape(v) + r"\s*[:/]\s*(?P<p>(?=\S*\d)(?=\S*[A-Za-z])[^\s|,;]{6,64})", text):
-                    if free(m.start("p"), m.end("p")):
+                    if claim(m.start("p"), m.end("p")):
                         out.append((Found(m.start("p"), m.end("p"), "secret", "password_after_login"), ""))
-                        busy.append((m.start("p"), m.end("p")))
         for v, cat in sorted(values.items(), key=lambda x: -len(x[0])):
             if len(v.strip()) < 4 or v.isalpha() and len(v) < 6:
                 continue
             rx = re.compile(("(?<![\\w])" if v[0].isalnum() else "") + re.escape(v) + ("(?![\\w])" if v[-1].isalnum() else ""))
             for m in rx.finditer(text):
-                if free(m.start(), m.end()):
+                if claim(m.start(), m.end()):
                     out.append((Found(m.start(), m.end(), cat, "known_value"), ""))
-                    busy.append((m.start(), m.end()))
         return out
 
     # --------------------------------------------------------------------------------------- замены

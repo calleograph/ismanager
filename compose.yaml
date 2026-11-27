@@ -28,6 +28,7 @@ services:
       dockerfile: Dockerfile.worker
     environment:
       ASR_DEVICE: ${ASR_DEVICE:-cpu}
+      ASR_THREADS: ${ASR_THREADS:-}
       WATCH_POLL_SECONDS: ${WATCH_POLL_SECONDS:-15}
       SECRET_KEY: ${SECRET_KEY:?Запустите install.sh}
     volumes:

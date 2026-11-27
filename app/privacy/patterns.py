@@ -155,41 +155,46 @@ def _v(m: re.Match, name: str = "v") -> tuple[int, int]:
     return (m.start(name), m.end(name)) if name in m.re.groupindex and m.group(name) is not None else (m.start(), m.end())
 
 
-def find_structured(text: str, *, internal_domains: Iterable[str] = (), public_domains: Iterable[str] = ()) -> list[Found]:
+def find_structured(text: str, *, internal_domains: Iterable[str] = (), public_domains: Iterable[str] = (),
+                    categories: set[str] | None = None) -> list[Found]:
     """Все структурированные находки. Внешние публичные домены (github.com, example.org) не заменяются, если не перечислены как внутренние."""
     text = shadow(text)
     internal = [d.lower().strip(".") for d in internal_domains if d]
     public = {d.lower().strip(".") for d in public_domains if d}
     out: list[Found] = []
 
+    def matches(category: str, pattern: re.Pattern):
+        return pattern.finditer(text) if categories is None or category in categories else ()
+
     def add(s: int, e: int, cat: str, rule: str) -> None:
         while e > s and text[e - 1] in ".,":                 # точка или запятая в конце — знак препинания, а не часть адреса или учётной записи
             e -= 1
         out.append(Found(s, e, cat, rule))
 
-    for m in EMAIL.finditer(text):
+    for m in matches("email", EMAIL):
         add(m.start(), m.end(), "email", "email")
-    for f in credentials(text):
-        if f.category == "login":
-            add(f.start, f.end, "login", f.rule)
-    for m in HANDLE.finditer(text):
+    if categories is None or "login" in categories:
+        for f in credentials(text):
+            if f.category == "login":
+                add(f.start, f.end, "login", f.rule)
+    for m in matches("login", HANDLE):
         add(m.start(), m.end(), "login", "messenger_handle")
-    for m in USER_PATH.finditer(text):
+    for m in matches("host", USER_PATH):
         add(m.start(), m.end(), "host", "user_path")
-    for m in CONFIG_PATH.finditer(text):
+    for m in matches("host", CONFIG_PATH):
         add(m.start(), m.end(), "host", "config_path")
     for rx, rule in ((DN_CN, "directory_cn"), (URL_USER, "url_user")):
-        for m in rx.finditer(text):
+        for m in matches("login", rx):
             add(*_v(m), "login", rule)
-    for m in SID.finditer(text):
+    for m in matches("login", SID):
         add(m.start(), m.end(), "login", "windows_sid")
-    for m in ONEC_USER.finditer(text):
+    for m in matches("login", ONEC_USER):
         add(*_v(m), "login", "onec_launch_user")
-    for m in HOST_TOKEN.finditer(text):
+    for m in matches("host", HOST_TOKEN):
         segs = m.group(0).rstrip("$").lower().split("-")
         if any(c.isdigit() for c in m.group(0)) and any(x in _HOST_ROLES or re.fullmatch(r"(?:srv|db|sql|ws|app|web|fs|dc|vm|pc|nb|arm)\d+", x) for x in segs):
             add(m.start(), m.end(), "host", "host_name")
-    for m in URL.finditer(text):
+    for m in matches("url", URL):
         u = m.group(0).rstrip(".,;:)")
         host = re.sub(r"^[a-z]+://(?:[^@/]*@)?", "", u, flags=re.I).split("/")[0].split(":")[0]
         try:
@@ -199,9 +204,9 @@ def find_structured(text: str, *, internal_domains: Iterable[str] = (), public_d
             internal_ip = False
         if internal_ip or _host_internal(host, internal) or ("@" in u.split("/")[2] if u.count("/") >= 2 else False) or re.search(r"(?i)[?&](?:token|key|secret|password|sig|signature)=", u):
             add(m.start(), m.start() + len(u), "url", "internal_url")
-    for m in UNC.finditer(text):
+    for m in matches("host", UNC):
         add(m.start(), m.end(), "host", "unc_path")
-    for m in IPV4.finditer(text):
+    for m in matches("ip", IPV4):
         raw = m.group(0).split("/")[0]
         if _VERSION_BEFORE.search(text[max(0, m.start() - 30):m.start()]):
             continue                                     # РелизКонфигурации = "8.3.24.1559", version 1.2.3.4 — номер версии, а не адрес
@@ -212,15 +217,15 @@ def find_structured(text: str, *, internal_domains: Iterable[str] = (), public_d
         if raw.count(".") == 3 and not re.match(r"^\d+\.\d+\.\d+\.\d+$", raw):
             continue
         add(m.start(), m.end(), "ip", "ipv4")
-    for m in IPV6.finditer(text):
+    for m in matches("ip", IPV6):
         try:
             ipaddress.IPv6Address(m.group(0).split("/")[0])
         except ValueError:
             continue
         add(m.start(), m.end(), "ip", "ipv6")
-    for m in MAC.finditer(text):
+    for m in matches("ip", MAC):
         add(m.start(), m.end(), "ip", "mac")
-    for m in FQDN.finditer(text):
+    for m in matches("host", FQDN):
         host = m.group(0)
         tld = host.rsplit(".", 1)[-1].lower()
         if tld in _FILE_EXT or host.lower() in public:
@@ -229,98 +234,98 @@ def find_structured(text: str, *, internal_domains: Iterable[str] = (), public_d
             add(m.start(), m.end(), "host", "internal_host")
         elif tld not in PUBLIC_TLDS_OK and not re.fullmatch(r"[a-z]{2,24}", tld):
             add(m.start(), m.end(), "host", "host")
-    for m in WIN_ACCOUNT.finditer(text):
+    for m in matches("login", WIN_ACCOUNT):
         add(m.start(), m.end(), "login", "domain_account")
-    for m in LOGIN_CTX.finditer(text):
+    for m in matches("login", LOGIN_CTX):
         add(*_v(m), "login", "login_context")
-    for m in HOST_CTX.finditer(text):
+    for m in matches("host", HOST_CTX):
         add(*_v(m), "host", "host_context")
-    for m in INN_CTX.finditer(text):
+    for m in matches("id_number", INN_CTX):
         add(*_v(m), "id_number", "inn" if inn_ok(m.group("v")) else "inn_context")
         if m.group("kpp"):
             add(m.start("kpp"), m.end("kpp"), "id_number", "kpp")
-    for m in INN_BARE.finditer(text):
+    for m in matches("id_number", INN_BARE):
         if inn_ok(m.group(0)) and not re.match(r"(?:19|20)\d{2}", m.group(0)):
             add(m.start(), m.end(), "id_number", "inn_checksum")
-    for m in KPP_CTX.finditer(text):
+    for m in matches("id_number", KPP_CTX):
         add(*_v(m), "id_number", "kpp")
-    for m in OGRN.finditer(text):
+    for m in matches("id_number", OGRN):
         add(*_v(m), "id_number", "ogrn")
-    for m in SNILS.finditer(text):
+    for m in matches("id_number", SNILS):
         if snils_ok(m.group(0)):
             add(m.start(), m.end(), "id_number", "snils")
-    for m in SNILS_CTX.finditer(text):                   # подписанный номер заменяется и с неверной контрольной суммой: опечатка не делает его открытым
+    for m in matches("id_number", SNILS_CTX):                   # подписанный номер заменяется и с неверной контрольной суммой: опечатка не делает его открытым
         add(*_v(m), "id_number", "snils_context")
-    for m in SNILS_FORMAT.finditer(text):
+    for m in matches("id_number", SNILS_FORMAT):
         add(m.start(), m.end(), "id_number", "snils_format")
-    for m in BIK.finditer(text):
+    for m in matches("bank", BIK):
         add(*_v(m), "bank", "bik")
-    for m in ACCOUNT.finditer(text):
+    for m in matches("bank", ACCOUNT):
         add(*_v(m), "bank", "bank_account")
-    for m in ACCOUNT_FORMAT.finditer(text):
+    for m in matches("bank", ACCOUNT_FORMAT):
         if not _TECH_FIELD.search(text[max(0, m.start() - 32):m.start()]):
             add(m.start(), m.end(), "bank", "bank_account_format")
-    for m in CARD.finditer(text):
+    for m in matches("bank", CARD):
         if luhn_ok(m.group(0)) and not _TECH_FIELD.search(text[max(0, m.start() - 32):m.start()]):
             add(m.start(), m.end(), "bank", "card_luhn")
     for rx, rule in ((CARD_CTX, "card_context"), (CARD_EXP, "card_expiry"), (CARD_CVC, "card_cvc"), (CARD_HOLDER, "card_holder")):
-        for m in rx.finditer(text):
+        for m in matches("bank", rx):
             for g in ("v", "mir"):
                 if g in rx.groupindex and m.group(g) and not (g == "mir" and _TECH_FIELD.search(text[max(0, m.start() - 32):m.start()])):
                     add(m.start(g), m.end(g), "bank", rule)
-    for m in PASSPORT.finditer(text):
+    for m in matches("id_number", PASSPORT):
         add(*_v(m), "id_number", "passport")
-    for m in PASSPORT_INTL.finditer(text):
+    for m in matches("id_number", PASSPORT_INTL):
         add(*_v(m), "id_number", "passport_intl")
-    for m in PASSPORT_FORMAT.finditer(text):
+    for m in matches("id_number", PASSPORT_FORMAT):
         add(m.start(), m.end(), "id_number", "passport_format")
     for rx, rule in ((ISSUED, "issue_details"), (BIRTH, "birth_date"), (MEDICAL_ID, "document_id")):
-        for m in rx.finditer(text):
+        for m in matches("id_number", rx):
             for g in rx.groupindex:
                 if m.group(g):
                     add(m.start(g), m.end(g), "id_number", rule)
-    for m in HEALTH.finditer(text):
+    for m in matches("health", HEALTH):
         g = next(g for g in HEALTH.groupindex if m.group(g))
         add(m.start(g), m.start(g) + len(m.group(g).rstrip(" ,")), "health", "health")
-    for m in LABELED_PERSON.finditer(text):
+    for m in matches("person", LABELED_PERSON):
         g = "v" if m.group("v") else "v2"
         add(m.start(g), m.end(g), "person", "labeled_person")
-    for m in PHONE_INTL.finditer(text):
+    for m in matches("phone", PHONE_INTL):
         if 10 <= len(_digits(m.group(0))) <= 15 and not m.group(0).startswith("+7"):
             add(m.start(), m.end(), "phone", "phone_intl")
-    for m in PHONE.finditer(text):
+    for m in matches("phone", PHONE):
         if len(_digits(m.group(0))) >= 7 and not re.match(r"[78]800", _digits(m.group(0))):      # 8-800 — открытый номер организации
             add(m.start(), m.end(), "phone", "phone")
-    for m in DOC_NUMBER.finditer(text):
+    for m in matches("doc_number", DOC_NUMBER):
         if re.fullmatch(r"[АA]\d{2}-\d+/\d{4}", m.group("v")):
             continue                                     # номер арбитражного дела (А40-55123/2026) — открытые сведения картотеки суда
         add(*_v(m), "doc_number", "document_number")
-    for m in TICKET_ID.finditer(text):
+    for m in matches("doc_number", TICKET_ID):
         add(*_v(m), "doc_number", "ticket_id")
     for rx in (MONEY_CTX, PERCENT_CTX):
-        for m in rx.finditer(text):
+        for m in matches("money", rx):
             if not _PUBLIC_PRICE.search(text[max(0, m.start() - 60):m.start("v")]):
                 add(*_v(m), "money", "commercial_figure")
-    for m in MARKER.finditer(text):
+    for m in matches("marker", MARKER):
         add(m.start(), m.end(), "marker", "confidentiality_marker")
-    for m in PROJECT_CODE.finditer(text):
+    for m in matches("project", PROJECT_CODE):
         add(*_v(m), "project", "project_code")
-    for m in NUMBER_LABEL.finditer(text):
+    for m in matches("doc_number", NUMBER_LABEL):
         if not re.search(r"(?i)табельн\w*\s+$", text[max(0, m.start() - 15):m.start()]):        # табельный номер — служебный, как номер заявки
             add(*_v(m), "doc_number", "labeled_number")
-    for m in MONEY.finditer(text):
+    for m in matches("money", MONEY):
         if _PUBLIC_PRICE.search(text[max(0, m.start() - 60):m.start()]):
             continue                                     # «открытая цена на сайте 4 900 руб.» — публичные сведения
         e = m.end()
         if re.match(r"\.(?:\s*[а-яёa-z]|[,;:)\]])", text[e:e + 4]):
             e += 1                                       # «1,2 млн руб. подпишем» — точка сокращения входит в сумму, а не остаётся «концом предложения»
         out.append(Found(m.start(), e, "money", "money"))
-    for m in LEGAL_ENTITY.finditer(text):
+    for m in matches("organization", LEGAL_ENTITY):
         add(m.start(), m.end(), "organization", "legal_entity")
-    for m in ADDRESS.finditer(text):
+    for m in matches("address", ADDRESS):
         add(m.start(), m.end(), "address", "address")
-    for m in ADDRESS_INDEX.finditer(text):
+    for m in matches("address", ADDRESS_INDEX):
         add(m.start(), m.end(), "address", "address_index")
-    for m in ADDRESS_CTX.finditer(text):
+    for m in matches("address", ADDRESS_CTX):
         add(*_v(m), "address", "address_context")
     return out

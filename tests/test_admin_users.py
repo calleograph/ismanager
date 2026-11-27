@@ -85,6 +85,7 @@ def test_user_directory_pagination_and_upgrade(tmp_path):
         db.commit()
         first_id = db.execute("SELECT id FROM users WHERE username='reader-2'").fetchone()[0]
         db.execute("ALTER TABLE users DROP COLUMN disabled")
+        db.execute("DROP INDEX audit_target")
         db.execute("ALTER TABLE audit DROP COLUMN target_user")
     with ThreadPoolExecutor(max_workers=2) as workers:
         list(workers.map(create_app, [config, config]))

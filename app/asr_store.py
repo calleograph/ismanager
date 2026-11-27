@@ -75,6 +75,7 @@ def init_db(db):
             error TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS transcripts_owner ON transcripts(owner);
+        CREATE INDEX IF NOT EXISTS transcripts_recent ON transcripts(owner,created DESC,id DESC);
         CREATE INDEX IF NOT EXISTS transcripts_queue ON transcripts(status);
         CREATE TABLE IF NOT EXISTS watch_resources (
             id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
@@ -95,6 +96,9 @@ def init_db(db):
             UNIQUE(rule_id,name)
         );
         CREATE INDEX IF NOT EXISTS watch_files_queue ON watch_files(state,retry_at,updated);
+        CREATE INDEX IF NOT EXISTS watch_files_recent ON watch_files(rule_id,updated DESC,id DESC);
+        CREATE INDEX IF NOT EXISTS watch_files_open ON watch_files(rule_id,state,error)
+            WHERE state IN ('settling','queued','running','publishing','failed','conflict','missing');
         CREATE INDEX IF NOT EXISTS watch_content ON watch_files(source_sha) WHERE source_sha!='';
     """)
     migrate_rules(db)
@@ -115,6 +119,8 @@ def model_status(data_dir):
 
 
 def claim(db):
+    if not db.execute("SELECT 1 FROM transcripts WHERE status='queued' LIMIT 1").fetchone():
+        return None
     return db.execute("""
         UPDATE transcripts SET status='running', progress=0, seconds=0, error='',
             started_at=unixepoch(),recognizing_at=NULL,finished_at=NULL

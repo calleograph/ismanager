@@ -27,6 +27,6 @@ def independent_check(text: str, policy: Policy) -> list[str]:
         leaks += [f.category for f in faceless.find(text, secrets_only=True)]
     want = {c for c in STRICT_CATEGORIES if policy.action(c) != "keep"}
     if want:
-        leaks += [f.category for f in find_structured(text, internal_domains=policy.internal_domains, public_domains=policy.public_domains)
-                  if f.category in want]
+        leaks += [f.category for f in find_structured(text, internal_domains=policy.internal_domains,
+                                                      public_domains=policy.public_domains, categories=want)]
     return leaks

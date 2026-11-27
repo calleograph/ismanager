@@ -663,6 +663,24 @@ def ocr(path):
     return run_tool(["tesseract", str(path), "stdout", "-l", "rus+eng"], timeout=90).decode("utf-8").strip()
 
 
+def pdf_text_pages(path, count):
+    options = ["-layout", "-enc", "UTF-8", str(path), "-"]
+    # Parse a bounded range in one Poppler process, then hand each page to the same OCR checks.
+    for first in range(1, count + 1, 16):
+        last = min(first + 15, count)
+        try:
+            data = run_tool(["pdftotext", "-f", str(first), "-l", str(last), *options])
+            pages = data.decode("utf-8").split("\f")
+        except FileError:
+            pages = []
+        if len(pages) == last - first + 2 and not pages[-1]:
+            yield from (page.strip() for page in pages[:-1])
+        else:
+            for number in range(first, last + 1):
+                bounds = ["-f", str(number), "-l", str(number), "-nopgbrk"]
+                yield run_tool(["pdftotext", *bounds, *options]).decode("utf-8").strip()
+
+
 def media(ext, data, out, batch, *, inline=False):
     with tempfile.TemporaryDirectory(prefix="ismanager-ocr-") as directory:
         path = Path(directory) / ("input." + ext)
@@ -707,13 +725,8 @@ def media(ext, data, out, batch, *, inline=False):
         }
         rendered = Path(directory) / "page.png"
         had_ocr = False
-        for number in range(1, int(pages[1]) + 1):
+        for number, native in enumerate(pdf_text_pages(path, int(pages[1])), 1):
             bounds = ["-f", str(number), "-l", str(number)]
-            native = (
-                run_tool(["pdftotext", *bounds, "-layout", "-nopgbrk", "-enc", "UTF-8", str(path), "-"])
-                .decode("utf-8")
-                .strip()
-            )
             if native:
                 out.append(native)
             if number in images or not native:

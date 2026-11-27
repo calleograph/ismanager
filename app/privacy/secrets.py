@@ -255,7 +255,8 @@ def _tables(text: str) -> list[Found]:
 
 _LAT2CYR = str.maketrans("aceopxyuAEOPCTHBKMX", "асеорхуиАЕОРСТНВКМХ")
 _CYR2LAT = str.maketrans("асеорхуАЕОРСТНВКМХ", "aceopxyAEOPCTHBKMX")
-_MIXED = re.compile(r"[A-Za-zА-Яа-яЁё]+")
+# English and Russian words written in a single alphabet need no normalization.
+_MIXED = re.compile(r"(?<![A-Za-zА-Яа-яЁё])(?:[A-Za-z]+[А-Яа-яЁё]|[А-Яа-яЁё]+[A-Za-z])[A-Za-zА-Яа-яЁё]*")
 
 
 def shadow(text: str) -> str:
@@ -264,8 +265,6 @@ def shadow(text: str) -> str:
     def fix(m: re.Match) -> str:
         w = m.group(0)
         lat = sum(c < "\u0400" for c in w)
-        if not lat or lat == len(w):
-            return w
         if re.search(r"[A-Z]{2,}[А-ЯЁа-яё]|[А-ЯЁ]{2,}[A-Za-z]|[а-яё][A-Z]{2,}|[a-z][А-ЯЁ]{2,}", w):
             return w                                            # слитная аббревиатура (HTTPПароль, APIКлюч, КлючAPI) — не подмена букв
         return w.translate(_LAT2CYR if lat * 2 < len(w) else _CYR2LAT)

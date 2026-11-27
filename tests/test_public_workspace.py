@@ -4,6 +4,7 @@ import secrets
 from concurrent.futures import ThreadPoolExecutor
 
 from app import create_app
+from app.auth import digest
 from app.db import get_db
 from test_platform import token
 
@@ -63,3 +64,22 @@ def test_concurrent_first_submissions_share_one_guest_owner(tmp_path):
     with app.app_context():
         counts = get_db().execute("SELECT count(*),count(distinct owner) FROM redaction_batches").fetchone()
         assert tuple(counts) == (4, 1)
+
+
+def test_overview_orders_simultaneous_materials(tmp_path):
+    app = create_app(dict(TESTING=True, DATA_DIR=str(tmp_path), SECRET_KEY=secrets.token_hex(32)))
+    guest = app.test_client()
+    with guest.session_transaction() as state:
+        state["workspace"] = "example-workspace"
+    stamp = "2026-01-02 03:04"
+    with app.app_context(), get_db() as db:
+        owner = db.execute("INSERT INTO users(identity,username,display_name,admin) VALUES (?,'','',0)",
+                           ("guest:" + digest("example-workspace"),)).lastrowid
+        db.executemany("INSERT INTO transcripts(id,owner,filename,created) VALUES (?,?,?,?)",
+                       ((f"job-{i}", owner, f"file-{i}", stamp) for i in range(8)))
+        db.execute("INSERT INTO redaction_batches(owner,created,nonce) VALUES(?,?,?)",
+                   (owner, stamp, "example"))
+    html = guest.get("/").text
+    assert re.findall(r'href="(/redaction/batches/[0-9]+|/transcription/job-[0-9]+)"', html) == [
+        "/redaction/batches/1", *(f"/transcription/job-{i}" for i in range(7, 2, -1)),
+    ]

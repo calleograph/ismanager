@@ -1,5 +1,6 @@
 """Редактируемые документы для рассмотрения комиссией оператора."""
 
+from copy import deepcopy
 from datetime import date
 from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -10,6 +11,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
+from docx.text.paragraph import Paragraph
 
 from . import CAT, CATEGORIES, CONCLUSIONS, CONSEQUENCES, FIELDS, LABELS, assess, commission, profile
 
@@ -53,6 +55,17 @@ def table(doc, headings, rows):
     t = doc.add_table(rows=0, cols=len(headings))
     t.style = "Table Grid"
 
+    # Reuse the fixed formatting XML instead of rebuilding it for each cell.
+    p = Paragraph(OxmlElement("w:p"), t)
+    p.paragraph_format.space_after = Pt(0)
+    p.paragraph_format.line_spacing = 1
+    run = p.add_run()
+    run.font.size = Pt(10)
+    run.bold = False
+    body_format = deepcopy(p._p)
+    run.bold = True
+    header_format = p._p
+
     def add(values, header=False):
         row = t.add_row()
         props = row._tr.get_or_add_trPr()
@@ -60,12 +73,9 @@ def table(doc, headings, rows):
         if header:
             props.append(OxmlElement("w:tblHeader"))
         for cell, value in zip(row.cells, values):
-            p = cell.paragraphs[0]
-            p.paragraph_format.space_after = Pt(0)
-            p.paragraph_format.line_spacing = 1
-            run = p.add_run(str(value or "—"))
-            run.font.size = Pt(10)
-            run.bold = header
+            paragraph = deepcopy(header_format if header else body_format)
+            paragraph.r_lst[0].text = str(value or "—")
+            cell._tc.replace(cell._tc.p_lst[0], paragraph)
 
     add(headings, True)
     for values in rows:

@@ -69,7 +69,14 @@ def test_exact_account_filter_survives_csv_and_same_login(tmp_path):
         ids = [db.execute("INSERT INTO users(identity,username,display_name,admin) VALUES(?, 'sam','Sam',0)",
                           (f"ldap:{n}:sam",)).lastrowid for n in (1,2)]
         db.executemany("INSERT INTO audit(actor,event) VALUES(?,?)", zip(ids,("user.enabled","user.disabled")))
+        db.execute("INSERT INTO audit(actor,event,target_user) VALUES(?,'legacy.self',?)", (ids[0], ids[0]))
         db.commit()
     assert f"account={ids[0]}" in client.get("/admin/users/?q=sam").text
-    exact = client.get(f"/admin/journal/export.csv?account={ids[0]}").get_data(as_text=True)
+    query = {"account": ids[0]}
+    page = client.get("/admin/journal/", query_string=query).text
+    assert page.count('value="legacy.self"') == 1
+    exact = client.get("/admin/journal/export.csv", query_string=query).text
     assert "user.enabled" in exact and "user.disabled" not in exact
+    filtered = client.get("/admin/journal/export.csv", query_string=query | {"event": "legacy.self"}).text
+    rows = list(csv.reader(io.StringIO(filtered), delimiter=";"))
+    assert len(rows) == 2 and rows[1][3] == "legacy.self"

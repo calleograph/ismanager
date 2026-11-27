@@ -28,11 +28,14 @@ def browser_workspace(create=False):
         session.permanent = True
     identity = "guest:" + digest(session["workspace"])
     db = get_db()
-    if create:
+    lookup = "SELECT id,admin FROM users WHERE identity=?"
+    row = db.execute(lookup, (identity,)).fetchone()
+    if row is None and create:
         with db:
             db.execute("INSERT OR IGNORE INTO users(identity,username,display_name,admin) VALUES (?,'','',0)",
                        (identity,))
-    return db.execute("SELECT id,admin FROM users WHERE identity=?", (identity,)).fetchone() or {"id": None, "admin": 0}
+        row = db.execute(lookup, (identity,)).fetchone()
+    return row or {"id": None, "admin": 0}
 
 
 # Only navigable GET screens. Search text, DNs, export requests and raw URLs

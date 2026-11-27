@@ -9,6 +9,7 @@ import zlib
 import pytest
 from PIL import Image, ImageDraw, ImageFont
 
+from app.privacy import files
 from app.privacy.files import (
     BATCH_MAX_TEXT,
     MAX_TEXT,
@@ -240,6 +241,23 @@ def test_mixed_page_uses_both_layers(tmp_path):
     path.write_bytes(mixed_pdf())
     text, note = extract_isolated(path, "pdf")
     assert "Native heading" in text and "8392" in text and "OCR" in note
+
+
+def test_pdf_page_ranges_preserve_order_and_fall_back_on_unexpected_separators(monkeypatch):
+    calls = []
+
+    def tool(args):
+        first, last = int(args[2]), int(args[4])
+        calls.append((first, last))
+        if first == 1 and last == 16:
+            return b"\f".join(str(page).encode() for page in range(1, 17)) + b"\f"
+        if first != last:
+            return b"unexpected page separators"
+        return str(first).encode()
+
+    monkeypatch.setattr(files, "run_tool", tool)
+    assert list(files.pdf_text_pages("mixed.pdf", 18)) == [str(page) for page in range(1, 19)]
+    assert calls == [(1, 16), (17, 18), (17, 17), (18, 18)]
 
 
 def test_helpdesk_comment_does_not_turn_the_column_into_passwords():

@@ -61,6 +61,9 @@ def init_db(db):
             db.execute("ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0")
         if "target_user" not in {col[1] for col in db.execute("PRAGMA table_info(audit)")}:
             db.execute("ALTER TABLE audit ADD COLUMN target_user INTEGER REFERENCES users(id)")
+        db.execute("CREATE INDEX IF NOT EXISTS audit_actor ON audit(actor) WHERE actor IS NOT NULL")
+        db.execute("CREATE INDEX IF NOT EXISTS audit_target ON audit(target_user) WHERE target_user IS NOT NULL")
+        db.execute("CREATE INDEX IF NOT EXISTS users_admin_list ON users(id,identity) WHERE identity NOT LIKE 'guest:%'")
 
 
 def audit(event, actor=None, *, target=None):

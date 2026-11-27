@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 
 from app.privacy import names, processing
-from app.privacy.secrets import mask_explicit_fields
+from app.privacy.secrets import mask_explicit_fields, shadow
 from app.privacy.known_values import MASK
 from app.privacy.patterns import find_structured
 from app.privacy.verify import independent_check
@@ -64,6 +64,23 @@ def test_internal_ticket_ids_without_number_sign():
     text = "Номер заявки: SKY-2099-0234. Инцидент ORB-ASR-2098-0056."
     observed = {text[f.start:f.end] for f in find_structured(text) if f.category == "doc_number"}
     assert observed == {"SKY-2099-0234", "ORB-ASR-2098-0056"}
+
+
+def test_independent_detector_filter_preserves_matches_in_order():
+    source = ("Адрес: г. Москва, ул. Примерная, д. 5\nuser@example.invalid\n"
+              "СНИЛС 102-123-456 77. IP 192.0.2.13. Телефон +7 (901) 555-10-13. "
+              "Срок действия 05/27. Паспорт 45 05 123456. Диагноз: астма.")
+    complete = find_structured(source)
+    assert {f.category for f in complete} >= {"email", "phone", "ip", "id_number", "bank", "health"}
+    selected = {"email", "phone", "ip", "id_number", "bank"}
+    assert find_structured(source, categories=selected) == [f for f in complete if f.category in selected]
+
+
+def test_confusable_shadow_preserves_positions_and_abbreviations():
+    text = "Иванов английский Password Pаssword рожденuя HTTPПароль КлючAPI"
+    expected = "Иванов английский Password Password рождения HTTPПароль КлючAPI"
+    assert shadow(text) == expected
+    assert len(shadow(text)) == len(text)
 
 
 @pytest.mark.skipif(not (names.NLP_DIR / names.NER_FILE).is_file(), reason="requires local NLP models")

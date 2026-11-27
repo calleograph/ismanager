@@ -67,6 +67,7 @@ sudo ./scripts/manage.py status
 - [Обезличивание и генератор паролей](docs/TEXT_TOOLS.md)
 - [Генератор моделей угроз](docs/threats.md)
 - [Сторонние компоненты и лицензии](docs/LICENSES.md)
+- [Производительность и Ponytail-аудит](docs/PERFORMANCE_AUDIT.md)
 - [Фактические проверки выпусков](docs/VERIFICATION.md)
 - [Изменения версий](CHANGELOG.md)
 
