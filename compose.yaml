@@ -12,6 +12,7 @@ services:
       TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
     volumes:
       - data:/data
+      - watch:/watch:ro
       - ./.runtime/control:/control:ro
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-18443}:8443"
@@ -26,9 +27,12 @@ services:
       dockerfile: Dockerfile.worker
     environment:
       ASR_DEVICE: ${ASR_DEVICE:-cpu}
+      WATCH_POLL_SECONDS: ${WATCH_POLL_SECONDS:-15}
+      SECRET_KEY: ${SECRET_KEY:?Запустите install.sh}
     volumes:
       - data:/data
       - models:/models
+      - watch:/watch
     depends_on:
       web:
         condition: service_healthy
@@ -40,3 +44,4 @@ volumes:
   data:
     name: ${DATA_VOLUME:-ismanager_data}
   models:
+  watch:

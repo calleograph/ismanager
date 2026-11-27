@@ -11,12 +11,13 @@ from cryptography.hazmat.primitives.serialization import Encoding
 from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, url_for
 from ldap3.utils.dn import parse_dn
 
-from . import directory, journal
+from . import directory, journal, watch_admin
 from .asr_store import model_status
 from .auth import digest, protected, reveal
 from .db import audit, auth_settings, get_db
 
 bp = Blueprint("admin", __name__, url_prefix="/admin")
+watch_admin.register(bp)
 bp.add_url_rule("/journal/", "journal", journal.index)
 bp.add_url_rule("/journal/export.csv", "journal_csv", journal.export)
 bp.add_app_template_filter(journal.title, "audit_event")

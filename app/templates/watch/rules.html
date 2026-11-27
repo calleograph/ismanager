@@ -1,0 +1,22 @@
+{% extends 'base.html' %}
+{% block title %}Наблюдение за папками{% endblock %}
+{% block content %}
+<a href="{{ url_for('admin.index') }}">Администрирование</a>
+<h1>Наблюдение за папками</h1>
+<section class="panel">
+  <div class="actions">
+    <a class="btn" href="{{ url_for('admin.watch_edit') }}">Добавить правило</a>
+    <a class="btn secondary" href="{{ url_for('admin.storage') }}">Ресурсы хранения</a>
+  </div>
+  {% if rules %}
+  <table><thead><tr><th>Правило</th><th>Входная папка</th><th>Последний обход, UTC</th><th>В работе</th><th>Ошибки</th></tr></thead>
+    <tbody>{% for rule in rules %}
+    <tr><td><a href="{{ url_for('admin.watch_edit', rule_id=rule.id) }}">{{ rule.name }}</a><br>{{ 'Включено' if rule.enabled else 'Выключено' }}</td>
+      <td>{{ rule.input_name }}{% if rule.input_folder %} / {{ rule.input_folder }}{% endif %}</td>
+      <td>{{ rule.scan_time or 'Ожидается обход' }}{% if rule.error %}<p class="notice error">{{ rule.error }}</p>{% endif %}</td>
+      <td>{{ rule.pending }}</td><td>{{ rule.errors }}</td></tr>
+    {% endfor %}</tbody>
+  </table>
+  {% else %}<p>Добавьте правило для автоматической расшифровки новых записей из папки.</p>{% endif %}
+</section>
+{% endblock %}

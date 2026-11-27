@@ -9,6 +9,7 @@ import select
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -155,7 +156,14 @@ def decode(path):
                 proc.kill()
 
 
-def transcribe(path, engine, progress):
+def timestamp(samples):
+    seconds, millis = divmod(samples * 1000 // RATE, 1000)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours:02}:{minutes:02}:{seconds:02}.{millis:03}"
+
+
+def transcribe(path, engine, progress, *, timed=False):
     import numpy as np
     import torch
     from silero_vad import get_speech_timestamps
@@ -186,7 +194,10 @@ def transcribe(path, engine, progress):
             if result:
                 gap = (consumed + start - previous_end) / RATE if previous_end is not None else 0
                 separator = "\n\n" if gap >= 2 else " "
-                lines.append((separator if lines else "") + result)
+                if timed:
+                    lines.append(f"[{timestamp(consumed + start)} – {timestamp(consumed + end)}] {result}\n")
+                else:
+                    lines.append((separator if lines else "") + result)
                 previous_end = consumed + end
         consumed += cut
         del pending[:cut * 2]
@@ -231,6 +242,8 @@ def work(db, data_dir, engine):
 
     try:
         text = transcribe(source_path(data_dir, job_id), engine, progress)
+    except sqlite3.OperationalError:
+        raise
     except Exception as exc:
         LOG.error("Recording %s failed (%s)", job_id, type(exc).__name__)
         error = str(exc) if isinstance(exc, RecordingError) else "Сбой распознавания. Проверьте сервис worker и повторите."
@@ -244,6 +257,8 @@ def work(db, data_dir, engine):
 
 
 def main():
+    from . import folder_watch
+
     data = Path(os.getenv("DATA_DIR", "/data"))
     if sys.argv[1:] == ["health"]:
         try:
@@ -256,9 +271,15 @@ def main():
     with (data / "asr-worker.lock").open("a") as lock:
         # Only the holder may reclaim interrupted work after a container restart.
         fcntl.flock(lock, fcntl.LOCK_EX)
-        db = sqlite3.connect(os.getenv("DATABASE") or data / "ismanager.sqlite3", timeout=30)
+        database = os.getenv("DATABASE") or data / "ismanager.sqlite3"
+        db = folder_watch.connect(database)
         init_db(db)
         recover(db)
+        folder_watch.recover(db, data)
+        secret = os.getenv("SECRET_KEY", "")
+        interval = max(1, int(os.getenv("WATCH_POLL_SECONDS", folder_watch.INTERVAL)))
+        threading.Thread(target=folder_watch.scan_loop, args=(database, secret, interval),
+                         daemon=True, name="watch-scan").start()
         directory = Path(os.getenv("MODEL_DIR", "/models"))
         while True:
             try:
@@ -272,11 +293,29 @@ def main():
                 time.sleep(60)
         LOG.info("GigaAM v3 E2E RNNT ready (%s)", os.getenv("ASR_DEVICE", "cpu"))
         last_idle = 0
+        resume_after_lock = False
         while True:
             if time.monotonic() - last_idle > 15:
                 status(data, "GigaAM v3 E2E RNNT готова к работе", True)
                 last_idle = time.monotonic()
-            if not work(db, data, engine):
+            try:
+                if resume_after_lock:
+                    with db:
+                        db.execute("UPDATE transcripts SET status='queued' WHERE status='running'")
+                        db.execute("UPDATE watch_files SET state='queued' WHERE state='running'")
+                    resume_after_lock = False
+                uploaded = work(db, data, engine)
+                watched = folder_watch.work(db, data, engine, secret)
+            except sqlite3.OperationalError as exc:
+                error_code = getattr(exc, "sqlite_errorcode", 0) & 255
+                if error_code not in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+                    raise
+                db.rollback()
+                resume_after_lock = True
+                LOG.warning("Queue database busy. Retrying.")
+                time.sleep(2)
+                continue
+            if not uploaded and not watched:
                 time.sleep(1)
 
 

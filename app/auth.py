@@ -1,15 +1,14 @@
-import base64
 import hashlib
 import secrets
 import time
 
 import click
 import pyotp
-from cryptography.fernet import Fernet
 from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, session, url_for
 from flask.cli import with_appcontext
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from .credentials import credential_cipher
 from .db import audit, auth_settings, get_db
 
 bp = Blueprint("auth", __name__)
@@ -20,17 +19,12 @@ def digest(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def cipher():
-    key = hashlib.sha256(b"ismanager.credentials.v1:" + current_app.secret_key.encode()).digest()
-    return Fernet(base64.urlsafe_b64encode(key))
-
-
 def protected(text):
-    return cipher().encrypt(text.encode()).decode()
+    return credential_cipher(current_app.secret_key).encrypt(text.encode()).decode()
 
 
 def reveal(text):
-    return cipher().decrypt(text.encode()).decode()
+    return credential_cipher(current_app.secret_key).decrypt(text.encode()).decode()
 
 
 def reserve_login(login):

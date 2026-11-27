@@ -20,4 +20,18 @@ samba-tool group add Analysts
 samba-tool group add Readers
 samba-tool group addmembers Analysts analyst
 samba-tool group addmembers Readers Analysts
+if [[ ${WATCH_SHARE:-} == 1 ]]; then
+  # Dedicated test shares. Only the domain account used by the watcher can connect.
+  install -d -m 0777 /srv/watch-input /srv/watch-output
+  cat >> /etc/samba/smb.conf <<'CONF'
+[watch-input]
+    path = /srv/watch-input
+    read only = no
+    valid users = EXAMPLE\analyst
+[watch-output]
+    path = /srv/watch-output
+    read only = no
+    valid users = EXAMPLE\analyst
+CONF
+fi
 exec samba --foreground --no-process-group

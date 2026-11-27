@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% block title %}{{ data.name if rule_id else 'Новое правило наблюдения' }}{% endblock %}
+{% block content %}
+<a href="{{ url_for('admin.watches') }}">Наблюдение за папками</a>
+<h1>{{ data.name if rule_id else 'Новое правило наблюдения' }}</h1>
+{% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
+{% if choices %}
+<form method="post" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label>Название правила<input name="name" value="{{ data.name }}" maxlength="120" required></label>
+  <fieldset><legend>Входная папка</legend>
+    <label>Входной ресурс<select name="input_resource" required><option value="">Выберите ресурс</option>
+      {% for option in choices %}<option value="{{ option.id }}" {{ 'selected' if data.input_resource|int == option.id }}>{{ option.name }}</option>{% endfor %}
+    </select></label>
+    <label>Входная подпапка<input name="input_folder" value="{{ data.input_folder }}" placeholder="Пусто для корневой папки"></label>
+  </fieldset>
+  <fieldset><legend>Куда сохранять тексты</legend>
+    <label>Выходной ресурс<select name="output_resource"><option value="">Папка «Тексты IS Manager» внутри входной папки</option>
+      {% for option in choices %}<option value="{{ option.id }}" {{ 'selected' if data.output_resource|int == option.id }}>{{ option.name }}</option>{% endfor %}
+    </select></label>
+    <label>Подпапка выбранного выходного ресурса<input name="output_folder" value="{{ data.output_folder }}" placeholder="Пусто для корневой папки ресурса"></label>
+  </fieldset>
+  <p>GigaAM распознаёт русскую речь и сохраняет текст с таймкодами.</p>
+  <label><input type="checkbox" name="enabled" {{ 'checked' if data.enabled }}> Включить наблюдение</label>
+  <label><input type="checkbox" name="delete_source" aria-describedby="deletion-help" {{ 'checked' if data.delete_source }}> Удалять обработанный исходный файл после сохранения текста</label>
+  <p class="muted" id="deletion-help">После включения удаляются новые или изменённые записи, когда обработчик сохранит и проверит их текст. Исходники прежних расшифровок сохраняются.</p>
+  <button name="action" value="save">Сохранить правило</button>
+</form>
+{% else %}
+<section class="panel"><p>Сначала добавьте подключение к входной папке.</p>
+  <a class="btn" href="{{ url_for('admin.storage') }}">Ресурсы хранения</a>
+</section>
+{% endif %}
+{% if row %}
+<section class="panel"><h2>Обработка записей</h2>
+  {% if row.error %}<p class="notice error" role="alert">{{ row.error }}</p>{% endif %}
+  <form method="post" class="actions">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% if row.enabled %}<button class="secondary" name="action" value="scan">Проверить входную папку</button>{% endif %}
+    <button class="secondary" name="action" value="delete" data-confirm="Удалить правило и его журнал? Начатая файловая операция может завершиться.">Удалить правило</button>
+  </form>
+  {% if files %}
+  <table><caption>Последние 50 записей этого правила</caption>
+    <thead><tr><th>Обновление, UTC</th><th>Исходный файл</th><th>Состояние</th><th>Выходной файл</th></tr></thead>
+    <tbody>{% for f in files %}
+    <tr><td>{{ f.changed }}</td><td>{{ f.name }}</td><td>{{ states.get(f.state, f.state) }}
+      {% if f.error %}<p>{{ f.error }}</p>{% endif %}
+      {% if f.state == 'failed' %}<form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="file_id" value="{{ f.id }}">
+        <button class="secondary" name="action" value="retry">Повторить обработку</button>
+      </form>{% endif %}</td><td>{{ f.output_name or '—' }}</td></tr>
+    {% endfor %}</tbody>
+  </table>
+  {% else %}<p>Обнаруженные записи появятся здесь после обхода папки.</p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

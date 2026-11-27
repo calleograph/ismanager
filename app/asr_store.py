@@ -22,6 +22,33 @@ def init_db(db):
         );
         CREATE INDEX IF NOT EXISTS transcripts_owner ON transcripts(owner);
         CREATE INDEX IF NOT EXISTS transcripts_queue ON transcripts(status);
+        CREATE TABLE IF NOT EXISTS watch_resources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+            kind TEXT NOT NULL CHECK(kind IN ('local','smb')), path TEXT NOT NULL DEFAULT '',
+            server TEXT NOT NULL DEFAULT '', share TEXT NOT NULL DEFAULT '', port INTEGER NOT NULL DEFAULT 445,
+            domain TEXT NOT NULL DEFAULT '', username TEXT NOT NULL DEFAULT '', password TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS watch_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+            input_resource INTEGER NOT NULL REFERENCES watch_resources(id), input_folder TEXT NOT NULL DEFAULT '',
+            output_resource INTEGER REFERENCES watch_resources(id), output_folder TEXT NOT NULL DEFAULT '',
+            delete_source INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,
+            last_scan INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
+            UNIQUE(input_resource, input_folder)
+        );
+        CREATE TABLE IF NOT EXISTS watch_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, rule_id INTEGER NOT NULL REFERENCES watch_rules(id) ON DELETE CASCADE,
+            name TEXT NOT NULL, stamp TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'settling',
+            seen_since INTEGER NOT NULL, updated INTEGER NOT NULL, retry_at INTEGER NOT NULL DEFAULT 0,
+            error TEXT NOT NULL DEFAULT '', output_name TEXT NOT NULL, output_key TEXT NOT NULL UNIQUE,
+            source_sha TEXT NOT NULL DEFAULT '', timed_text TEXT NOT NULL DEFAULT '', result_stamp TEXT NOT NULL DEFAULT '',
+            published_sha TEXT NOT NULL DEFAULT '', output_stamp TEXT NOT NULL DEFAULT '',
+            replaced INTEGER NOT NULL DEFAULT 0, remove_after INTEGER NOT NULL DEFAULT 0,
+            fallback_sha TEXT NOT NULL DEFAULT '',
+            UNIQUE(rule_id,name)
+        );
+        CREATE INDEX IF NOT EXISTS watch_files_queue ON watch_files(state,retry_at,updated);
+        CREATE INDEX IF NOT EXISTS watch_content ON watch_files(source_sha) WHERE source_sha!='';
     """)
 
 

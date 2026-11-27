@@ -7,6 +7,7 @@ Apache License 2.0 распространяется на исходный код
 | MFA Gate | Apache-2.0, адаптированные элементы LDAP, тестового стенда и темы |
 | Flask, Werkzeug, Jinja, Click | BSD-3-Clause, серверный интерфейс |
 | Gunicorn | MIT, сервер WSGI |
+| smbprotocol и pyspnego | Клиент SMB2/3 и аутентификация доменной учётной записи, MIT. [smbprotocol](https://pypi.org/project/smbprotocol/1.17.0/) · [pyspnego](https://github.com/jborean93/pyspnego) |
 | ldap3 | LGPL-3.0, отдельная установленная библиотека LDAP |
 | cryptography | Apache-2.0 или BSD-3-Clause, шифрование секретов и сертификаты |
 | PyOTP | MIT, TOTP |

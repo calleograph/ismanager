@@ -62,6 +62,13 @@ jobs:
           web=$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q web)")
           worker=$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q worker)")
           "$RUNNER_TEMP/network-test/bin/python" -m tests.live_network "$web" "$worker"
+      - name: Transcribe local and domain SMB folders with real GigaAM
+        run: |
+          export CHROMIUM_PATH="$(command -v google-chrome)"
+          web=$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q web)")
+          worker=$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q worker)")
+          models=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/models"}}{{.Name}}{{end}}{{end}}' "$(docker compose ps -q worker)")
+          "$RUNNER_TEMP/network-test/bin/python" -m tests.live_folder_watch "$web" "$worker" "$models"
       - name: Back up and restore a new installation
         run: |
           docker compose exec -T web sh -c 'echo before > /data/ci-snapshot'
