@@ -1,38 +1,81 @@
 'use strict';
 
 (() => {
-  const form = document.getElementById('pass-form');
+  const byId = id => document.getElementById(id);
+  const form = byId('pass-form');
   const fields = form.elements;
-  const list = document.getElementById('pass-results');
-  const output = document.getElementById('pass-output');
-  const status = document.getElementById('pass-status');
-  const submit = document.getElementById('pass-generate');
+  const list = byId('pass-results');
+  const status = byId('pass-status');
+  const empty = byId('pass-empty');
+  const submit = byId('pass-generate');
+  const more = byId('pass-more');
+  const all = byId('pass-copy-all');
+  const manual = byId('pass-manual');
+  const tabs = [...form.querySelectorAll('[role=tab]')];
+  const labels = {
+    custom: ['Пароли из вашей фразы', 'Создать из моей фразы'],
+    dictionary: ['Пароли из словаря', 'Создать из словаря'],
+    story: ['Пароли-истории', 'Создать пароль-историю'],
+    random: ['Случайные пароли', 'Создать случайные пароли'],
+  };
+  let generation = 0;
   let vocabulary;
   const localAvailable = typeof globalThis.crypto?.getRandomValues === 'function';
   if (!localAvailable) {
-    fields.processor.querySelector('option[value="browser"]').disabled = true;
+    fields.processor.querySelector('[value=browser]').disabled = true;
     fields.processor.value = 'server';
     fields.processor.closest('details').open = true;
   }
-
-  function reset() {
+  function clear() {
+    generation++;
     list.replaceChildren();
-    output.hidden = true;
+    empty.hidden = false;
+    manual.hidden = true;
+    manual.value = '';
+    all.disabled = true;
     status.textContent = '';
+  }
+  function words() { return fields.phrase.value.trim().split(/[\s,;—–-]+/).filter(Boolean); }
+  function updateControls() {
+    const mode = fields.mode.value;
+    const latin = words().map(Generator.transliterate);
+    const minLength = latin.reduce((size, word) => size + word.length, Generator.SALT_MIN_LENGTH);
+    let message = '';
+    if (latin.length < 3 || latin.length > 5) message = 'Введите от трёх до пяти слов.';
+    else if (latin.some(word => word.length < 2)) message = 'В каждом слове нужно хотя бы две буквы.';
+    else if (words().some(word => word.length > 64)) message = 'Максимальная длина одного слова — 64 буквы.';
+    else if (new Set(latin).size !== latin.length) message = 'Слова должны различаться после транслитерации.';
+    else if (minLength < 15) message = 'Добавьте буквы, чтобы получить не менее 15 знаков.';
+    byId('pass-preview').textContent = latin.filter(Boolean).map(word => word[0].toUpperCase() + word.slice(1)).join(' · ') || 'Mayak · Oblako · Bereg';
+    byId('pass-guidance').textContent = message || 'В готовом пароле будет не менее ' + minLength + ' знаков.';
+    byId('pass-mode-note').textContent = fields.processor.value === 'browser'
+      ? 'Ваша фраза и готовые пароли остаются в этой вкладке.'
+      : (localAvailable ? '' : 'В браузере недоступен генератор случайных чисел. ') + 'По нажатию кнопки параметры передаются серверу IS Manager. Пароли не записываются в историю.';
+    for (const range of form.querySelectorAll('[type=range]')) {
+      form.querySelector('output[for="' + range.id + '"]').value = range.value;
+    }
+    submit.disabled = more.disabled = mode === 'custom' && Boolean(message);
+    empty.textContent = submit.disabled ? message : 'Нажмите «' + labels[mode][1] + '», чтобы получить варианты.';
+  }
+  function setMode(mode) {
+    clear();
+    fields.mode.value = mode;
+    tabs.forEach(tab => {
+      const active = tab.dataset.mode === mode;
+      tab.setAttribute('aria-selected', String(active));
+      tab.tabIndex = active ? 0 : -1;
+    });
     for (const panel of form.querySelectorAll('[data-modes]')) {
-      panel.hidden = !panel.dataset.modes.split(' ').includes(fields.mode.value);
+      panel.hidden = !panel.dataset.modes.split(' ').includes(mode);
     }
-    const hint = document.getElementById('pass-mode-note');
-    if (fields.processor.value === 'browser') {
-      hint.textContent = 'Ваша фраза и полученные пароли остаются в этой вкладке.';
-    } else {
-      const reason = localAvailable ? '' : 'В браузере недоступен генератор случайных чисел. ';
-      hint.textContent = reason + 'По нажатию кнопки параметры и своя фраза передаются серверу IS Manager. Пароли не записываются в историю.';
-    }
+    byId('pass-title').textContent = labels[mode][0];
+    submit.querySelector('span').textContent = labels[mode][1];
+    updateControls();
+    if (fields.processor.value === 'browser' && !submit.disabled) generate();
   }
   async function loadWords() {
     if (!vocabulary) {
-      vocabulary = fetch(form.dataset.dictionary, {credentials: 'same-origin'})
+      vocabulary = fetch(form.dataset.dictionary, {credentials:'same-origin'})
         .then(response => { if (!response.ok) throw new Error(); return response.json(); })
         .then(data => {
           Generator.setDictionary(data.dictionary.map(pair => pair[0]));
@@ -40,88 +83,177 @@
           Generator.setStoryData(data);
         }).catch(() => { vocabulary = null; throw new Error('Не удалось загрузить словари. Повторите генерацию.'); });
     }
-    await vocabulary;
+    return vocabulary;
   }
-  async function locally() {
-    const mode = fields.mode.value;
-    const position = fields.position.value;
+  async function locally(mode) {
     if (mode === 'random') {
       const options = {length: Number(fields.random_length.value), useUpper: fields.upper.checked,
         useLower: fields.lower.checked, useDigits: fields.digits.checked, useSpecial: fields.special.checked,
         specialChars: fields.specials.value, excludeAmbiguous: fields.exclude.checked};
       const seen = new Set();
-      for (let attempt = 0; seen.size < 7 && attempt < 100; attempt++) {
-        seen.add(Generator.generateRandomPassword(options));
-      }
-      return [...seen].map(password => ({password, words: []}));
+      for (let attempt = 0; seen.size < 7 && attempt < 100; attempt++) seen.add(Generator.generateRandomPassword(options));
+      return [...seen].map(password => ({password}));
     }
+    const options = {source: mode, insertPosition: fields.position.value, length: Number(fields.word_length.value), customWords: words()};
     if (mode !== 'custom') await loadWords();
-    const options = {source: mode, insertPosition: position, length: Number(fields.word_length.value),
-      customWords: fields.phrase.value.trim().split(/\s+/)};
-    const batch = mode === 'story' ? Generator.generateStoryBatch(options, 7) : Generator.generateConstructedBatch(options, 7);
-    return batch.map(item => ({password: item.password, words: item.breakdown.wordsRu}));
+    return mode === 'story' ? Generator.generateStoryBatch(options, 7) : Generator.generateConstructedBatch(options, 7);
   }
-  async function generate(event) {
-    event.preventDefault();
-    if (!form.reportValidity() || submit.disabled) return;
-    reset();
-    submit.disabled = true;
-    const data = new FormData(form);
-    if (fields.mode.value !== 'custom') data.delete('phrase');
-    // Lock mode while any asynchronous request is pending.
-    const enabled = [...fields].filter(field => !field.disabled);
+  async function onServer(mode) {
+    const formData = new FormData(form);
+    if (mode !== 'custom') formData.delete('phrase');
+    const response = await fetch(form.action, {method:'POST', body:formData, credentials:'same-origin', cache:'no-store'});
+    if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Обновите страницу и повторите генерацию.');
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Ошибка генерации.');
+    return payload.results;
+  }
+  async function copy(text, code) {
     try {
-      const result = fields.processor.value === 'server'
-        ? fetch(form.action, {method: 'POST', body: data, credentials: 'same-origin', cache: 'no-store'})
-            .then(async response => {
-              if (!response.headers.get('content-type')?.includes('application/json')) {
-                throw new Error('Обновите страницу и повторите генерацию.');
-              }
-              const payload = await response.json();
-              if (!response.ok) throw new Error(payload.error || 'Ошибка генерации.');
-              return payload.results;
-            })
-        : locally();
-      enabled.forEach(field => { field.disabled = true; });
-      for (const item of await result) {
-        const li = document.createElement('li');
-        const password = document.createElement('code');
-        password.textContent = item.password;
-        const copy = document.createElement('button');
-        copy.type = 'button';
-        copy.textContent = 'Копировать';
-        copy.addEventListener('click', async () => {
-          try {
-            await navigator.clipboard.writeText(item.password);
-            status.textContent = 'Пароль скопирован.';
-          } catch {
-            const selection = window.getSelection();
-            const range = document.createRange();
-            range.selectNodeContents(password);
-            selection.removeAllRanges();
-            selection.addRange(range);
-            status.textContent = 'Пароль выделен. Скопируйте его сочетанием клавиш.';
-          }
-        });
-        li.append(password, ' ', copy);
-        if (item.words.length) {
-          const hint = document.createElement('p');
-          hint.textContent = item.words.join(' · ');
-          li.append(hint);
-        }
-        list.append(li);
+      await navigator.clipboard.writeText(text);
+      status.textContent = code ? 'Пароль скопирован.' : 'Все варианты скопированы.';
+    } catch {
+      if (code) {
+        const range = document.createRange();
+        range.selectNodeContents(code);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+      } else {
+        manual.hidden = false;
+        manual.value = text;
+        manual.focus();
+        manual.select();
       }
-      output.hidden = false;
-      status.textContent = 'Готово. Вариантов: ' + list.children.length + '.';
-    } catch (error) {
-      status.textContent = error.message;
-    } finally {
-      enabled.forEach(field => { field.disabled = false; });
-      submit.disabled = false;
+      status.textContent = (code ? 'Пароль выделен.' : 'Все варианты выделены.') + ' Скопируйте сочетанием клавиш.';
     }
   }
-  form.addEventListener('input', reset);
-  form.addEventListener('submit', generate);
-  submit.disabled = false;
-  reset();
+  function appendRow(item, index) {
+    const row = byId('pass-row').content.firstElementChild.cloneNode(true);
+    const code = row.querySelector('code');
+    const hint = row.querySelector('small');
+    const info = row.querySelector('.pass-info');
+    const explanation = row.querySelector('.pass-breakdown');
+    const copier = row.querySelector('.pass-copy');
+    code.textContent = item.password;
+    const breakdown = item.breakdown;
+    const rows = [];
+    if (breakdown) {
+      const mode = fields.mode.value;
+      const source = {custom:'Ваши слова', dictionary:'Из словаря', story:'История'}[mode];
+      hint.textContent = source + ' · ' + breakdown.wordsRu.join(' + ') + ' · ' + item.password.length + ' зн.';
+      const at = breakdown.structure.indexOf('I');
+      const position = at === 0 ? 'в начале' : at === breakdown.fragments.length ? 'в конце' : 'между словами';
+      const salt = document.createElement('span');
+      salt.className = 'pass-salt';
+      salt.textContent = breakdown.insert;
+      code.replaceChildren(breakdown.fragments.slice(0, at).join(''), salt, breakdown.fragments.slice(at).join(''));
+      rows.push(['Слова', breakdown.wordsRu.join(' + ')], ['В пароле', breakdown.fragments.join(' + ')],
+        ['Случайная вставка', breakdown.insert + ' — ' + position]);
+    } else {
+      hint.textContent = 'Случайный набор · ' + item.password.length + ' зн.';
+      const groups = [[/[A-Z]/,'заглавные'], [/[a-z]/,'строчные'], [/[0-9]/,'цифры'], [/[^a-zA-Z0-9]/,'спецсимволы']];
+      rows.push(['Длина', String(item.password.length)], ['Состав', groups.filter(([regex]) => regex.test(item.password)).map(([,name]) => name).join(', ')]);
+    }
+    for (const [label, value] of rows) {
+      const term = document.createElement('dt');
+      const detail = document.createElement('dd');
+      term.textContent = label;
+      detail.textContent = value;
+      explanation.querySelector('dl').append(term, detail);
+    }
+    explanation.id = 'pass-detail-' + index;
+    info.setAttribute('aria-controls', explanation.id);
+    for (const [button, label] of [[copier,'Скопировать вариант '],[info,'Как собран вариант ']]) {
+      button.title = label + (index + 1);
+      button.setAttribute('aria-label', button.title);
+    }
+    copier.addEventListener('click', () => copy(item.password, code));
+    info.addEventListener('click', () => {
+      explanation.hidden = !explanation.hidden;
+      info.setAttribute('aria-expanded', String(!explanation.hidden));
+    });
+    list.append(row);
+  }
+  async function generate() {
+    if (submit.disabled || !form.reportValidity()) return;
+    clear();
+    const current = generation;
+    const mode = fields.mode.value;
+    empty.textContent = 'Генерируем варианты…';
+    submit.disabled = more.disabled = true;
+    try {
+      const result = await (fields.processor.value === 'server' ? onServer(mode) : locally(mode));
+      if (current !== generation) return;
+      result.forEach(appendRow);
+      all.disabled = false;
+      empty.hidden = true;
+      status.textContent = 'Готово. Вариантов — ' + result.length + '.';
+    } catch (error) {
+      if (current === generation) { empty.hidden = true; status.textContent = error.message; }
+    } finally {
+      if (current === generation) updateControls();
+    }
+  }
+  tabs.forEach((tab, i) => {
+    tab.addEventListener('click', () => setMode(tab.dataset.mode));
+    tab.addEventListener('keydown', event => {
+      let target;
+      if (event.key === 'ArrowRight') target = (i + 1) % tabs.length;
+      if (event.key === 'ArrowLeft') target = (i + tabs.length - 1) % tabs.length;
+      if (event.key === 'Home') target = 0;
+      if (event.key === 'End') target = tabs.length - 1;
+      if (target !== undefined) {
+        event.preventDefault();
+        tabs[target].focus();
+        tabs[target].click();
+      }
+    });
+  });
+  form.addEventListener('input', () => { clear(); updateControls(); });
+  form.addEventListener('submit', event => { event.preventDefault(); generate(); });
+  more.addEventListener('click', generate);
+  all.addEventListener('click', () => copy([...list.querySelectorAll('code')].map(code => code.textContent).join('\n')));
+  const advice = document.querySelector('.pass-advice');
+  const nextTip = byId('pass-tip');
+  let tips;
+  let tipIndex = 0;
+  nextTip.hidden = false;
+  async function showTip() {
+    if (nextTip.disabled) return;
+    nextTip.disabled = true;
+    try {
+      if (!tips) {
+        const response = await fetch(advice.dataset.tips);
+        if (!response.ok) throw new Error();
+        tips = await response.json();
+      }
+      const paragraph = advice.querySelector('p');
+      const tip = tips[tipIndex];
+      tipIndex = (tipIndex + 1) % tips.length;
+      paragraph.textContent = tip.text;
+      const link = advice.querySelector('a');
+      link.textContent = tip.source;
+      link.href = tip.url;
+    } catch {
+      status.textContent = 'Не удалось загрузить подсказки. Повторите попытку.';
+    } finally {
+      nextTip.disabled = false;
+    }
+  }
+  const rotation = byId('pass-rotation');
+  let tipTimer;
+  function rotate(enabled) {
+    clearInterval(tipTimer);
+    rotation.setAttribute('aria-pressed', String(enabled));
+    rotation.title = enabled ? 'Приостановить смену советов' : 'Возобновить смену советов';
+    if (enabled) tipTimer = setInterval(() => {
+      if (!document.hidden && !advice.matches(':hover, :focus-within')) showTip();
+    }, 15000);
+  }
+  const motion = matchMedia('(prefers-reduced-motion: reduce)');
+  rotation.hidden = false;
+  rotate(!motion.matches);
+  motion.addEventListener('change', () => rotate(!motion.matches));
+  rotation.addEventListener('click', () => rotate(rotation.getAttribute('aria-pressed') === 'false'));
+  nextTip.addEventListener('click', showTip);
+  setMode(fields.mode.value);
 })();

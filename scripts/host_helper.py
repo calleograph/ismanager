@@ -45,7 +45,16 @@ def main():
                 try:
                     msg = client.makefile("rb").readline(128).decode("ascii").strip().split(" ")
                     token = hashlib.sha256((settings()["SECRET_KEY"] + ":operator").encode()).hexdigest()
-                    if job or len(msg) != 2 or not secrets.compare_digest(msg[0], token) or msg[1] not in {"backup", "update", "rollback", "check"}:
+                    if len(msg) != 2 or not secrets.compare_digest(msg[0], token):
+                        client.sendall(b"no\n")
+                        continue
+                    if (STATE / "control" / "operator-disabled").exists():
+                        client.sendall(b"disabled\n")
+                        continue
+                    if msg[1] == "ping":
+                        client.sendall(b"busy\n" if job else b"ready\n")
+                        continue
+                    if job or msg[1] not in {"backup", "update", "rollback", "check"}:
                         client.sendall(b"no\n")
                         continue
                     with (STATE / "operator.log").open("wb") as log:

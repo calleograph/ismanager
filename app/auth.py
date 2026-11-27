@@ -19,6 +19,29 @@ def digest(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def browser_workspace(create=False):
+    """Keep anonymous materials private to a signed, HttpOnly browser session."""
+    if "workspace" not in session:
+        session["workspace"] = secrets.token_urlsafe(32)
+    if not session.permanent:
+        session.permanent = True
+    identity = "guest:" + digest(session["workspace"])
+    db = get_db()
+    if create:
+        with db:
+            db.execute("INSERT OR IGNORE INTO users(identity,username,display_name,admin) VALUES (?,'','',0)",
+                       (identity,))
+    return db.execute("SELECT id,admin FROM users WHERE identity=?", (identity,)).fetchone() or {"id": None, "admin": 0}
+
+
+def clear_login():
+    workspace = session.get("workspace")
+    session.clear()
+    if workspace:
+        session["workspace"] = workspace
+        session.permanent = True
+
+
 def protected(text):
     return credential_cipher(current_app.secret_key).encrypt(text.encode()).decode()
 
@@ -55,7 +78,7 @@ def begin(user_id, reservations=()):
     with db:
         db.execute("DELETE FROM sessions WHERE expires<=? OR token=?", (now, digest(session.get("sid", ""))))
         # Access can change between the directory bind and issuing the cookie.
-        issued = db.execute("INSERT INTO sessions(token,user_id,expires) SELECT ?,id,? FROM users WHERE id=? AND disabled=0",
+        issued = db.execute("INSERT INTO sessions(token,user_id,expires) SELECT ?,id,? FROM users WHERE id=? AND disabled=0 AND admin=1",
                             (digest(new_sid), now + 3600 * auth_settings()["hours"], user_id))
         if not issued.rowcount:
             abort(401, description="Вход отклонён.")
@@ -64,7 +87,7 @@ def begin(user_id, reservations=()):
             db.executemany("UPDATE attempts SET count=count-1 WHERE key=? AND until=? AND count>0", reservations)
             db.executemany("DELETE FROM attempts WHERE key=? AND until=? AND count=0", reservations)
             audit("login.ok", user_id)
-    session.clear()
+    clear_login()
     session.permanent = True
     session["sid"] = new_sid
 
@@ -84,7 +107,7 @@ def accept_totp(user, code):
 def login():
     from .admin import directory_login
     if request.method == "GET":
-        return redirect(url_for("dashboard")) if g.user else render_template("login.html")
+        return redirect(url_for("dashboard")) if g.user and g.user["admin"] else render_template("login.html")
     name = request.form.get("username", "").strip()
     password = request.form.get("password", "")
     reservations = reserve_login(name[:256])
@@ -100,7 +123,7 @@ def login():
         else:
             user = directory_login(name, password)
     code = request.form.get("code", "").strip()
-    if user is None or (user["totp"] and not (code.isascii() and code.isdigit() and accept_totp(user, code))):
+    if not user or not user["admin"] or (user["totp"] and not (code.isascii() and code.isdigit() and accept_totp(user, code))):
         with db:
             audit("login.denied")
         return render_template("login.html", error="Вход отклонён. Проверьте данные и код, если включена двухфакторная защита."), 401
@@ -112,8 +135,8 @@ def login():
 def logout():
     with get_db() as db:
         db.execute("DELETE FROM sessions WHERE token=?", (digest(session.get("sid", "")),))
-    session.clear()
-    return redirect(url_for("auth.login"))
+    clear_login()
+    return redirect(url_for("dashboard"))
 
 
 @bp.route("/account", methods=["GET", "POST"])

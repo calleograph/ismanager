@@ -439,13 +439,18 @@ class Directory:
                     raise FileExistsError("Имеющийся TXT занят или не допускает безопасную замену.") from None
             yield stream
 
-    def publish_text(self, name, text, *, previous_sha256=None, allow_identical=True):
+    def publish_text(self, name, text, *, previous_sha256=None, allow_identical=True, previous_document=None):
+        """For a redacted document the caller retains the source and the verified new text durably.
+        Retire its exact previous output without keeping a readable archive in the shared folder.
+        """
         _component(name)
         data = text.encode("utf-8")
         if Path(name).suffix.lower() != ".txt" or len(data) > MAX_TXT:
             raise ValueError("Ожидался текстовый результат допустимого размера.")
         if previous_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", previous_sha256):
             raise ValueError("Некорректная контрольная сумма.")
+        if previous_document is not None and (previous_document.name != name or not previous_sha256):
+            raise ValueError("Требуется сохранённый снимок и контрольная сумма прежнего результата.")
         current_sha = hashlib.sha256(data).hexdigest()
         tmp = ".ismanager-" + secrets.token_hex(16) + ".part"
         with self._io.open(tmp, write=True) as out:
@@ -463,6 +468,25 @@ class Directory:
                 self._io.unlink(tmp)
                 raise
         try:
+            if previous_document is not None:
+                # SQLite holds the verified new text and the flushed replacement is ready.
+                # POSIX captures the old inode privately; SMB disposes the verified handle.
+                # Repeat the same retirement after a crash, including after a lost reply.
+                try:
+                    identical = previous_sha256 == current_sha and self._output_hash(name) == current_sha
+                except FileNotFoundError:
+                    identical = False
+                if not identical:
+                    try:
+                        self._io.delete_source(previous_document, previous_sha256)
+                    except OSError as error:
+                        busy = error.errno in (errno.EACCES, errno.EBUSY, errno.EPERM)
+                        if not busy and not isinstance(error, (SourceChangedError, SourceRetainedError)):
+                            raise
+                        # When the last rename succeeded but its reply was lost, the old
+                        # snapshot no longer matches. Only adopt the exact intended text.
+                        if not allow_identical or self._output_hash(name) != current_sha:
+                            raise FileExistsError("Прежний результат изменён или занят.") from error
             try:
                 self._io.move(tmp, name)
                 return
@@ -472,7 +496,7 @@ class Directory:
                 if isinstance(self._io, _Local):
                     os.fsync(self._io.fd)
                 return
-            if old != previous_sha256:
+            if old != previous_sha256 or previous_document is not None:
                 raise FileExistsError("На месте результата уже есть другой файл.")
             backup = _backup_name(name, f"previous-{old[:12]}-{secrets.token_hex(5)}.txt")
             with self._guard_previous_text(name) as guarded:

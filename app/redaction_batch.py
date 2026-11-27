@@ -39,6 +39,15 @@ ERRORS = {
 }
 
 
+def mark_legacy_results(db, table):
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        if "legacy_rules" not in {r[1] for r in db.execute(f"PRAGMA table_info({table})")}:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN legacy_rules INTEGER NOT NULL DEFAULT 0")
+            where = " WHERE state='done'" if table == "redaction_batch_files" else ""
+            db.execute(f"UPDATE {table} SET legacy_rules=1" + where)
+
+
 def init_db(db):
     db.executescript("""
         CREATE TABLE IF NOT EXISTS redaction_batches (
@@ -64,6 +73,7 @@ def init_db(db):
             PRIMARY KEY(batch_id,token)
         );
     """)
+    mark_legacy_results(db, "redaction_batch_files")
 
 
 @contextmanager
@@ -193,7 +203,7 @@ def work(db, data_dir):
             logging.getLogger(__name__).warning("Batch file %d: %s", item["id"], error)
             status, result, replacements, warnings = "failed", None, 0, 0
         with db:
-            db.execute("UPDATE redaction_batch_files SET state=?,error=?,result=?,replacements=?,warnings=? WHERE id=?",
+            db.execute("UPDATE redaction_batch_files SET state=?,error=?,result=?,replacements=?,warnings=?,legacy_rules=0 WHERE id=?",
                        (status,error,result,replacements,warnings,item["id"]))
         if remove_input(directory,item["source"]):
             with db:
@@ -248,13 +258,15 @@ def batch(batch_id):
     db = get_db()
     counts = {row["state"]: row["n"] for row in db.execute(
         "SELECT state,count(*) AS n FROM redaction_batch_files WHERE batch_id=? GROUP BY state", (batch_id,))}
+    legacy = db.execute("SELECT 1 FROM redaction_batch_files WHERE batch_id=? AND state='done' AND legacy_rules=1 LIMIT 1",
+                        (batch_id,)).fetchone()
     total = sum(counts.values())
     last_page = max(1,(total + PAGE_SIZE - 1) // PAGE_SIZE)
     page = min(last_page,max(1,request.args.get("page",1,type=int)))
     files = db.execute("""SELECT ordinal,ext,state,error,replacements,warnings FROM redaction_batch_files
                           WHERE batch_id=? AND ordinal>? ORDER BY ordinal LIMIT ?""",
                        (batch_id,(page-1)*PAGE_SIZE,PAGE_SIZE)).fetchall()
-    return render_template("redaction/batch.html", batch=info, counts=counts, total=total, states=STATES,
+    return render_template("redaction/batch.html", batch=info, counts=counts, legacy=legacy, total=total, states=STATES,
                            errors=ERRORS, files=files, page=page, last_page=last_page, formats=SUPPORTED,
                            limit=BATCH_MAX_BYTES, nonce=secrets.token_hex(16))
 

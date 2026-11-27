@@ -126,6 +126,8 @@ _PUBLIC_PRICE = re.compile(r"(?i)публичн\w*|открыт\w+\s+цен\w*|�
 _VERSION_BEFORE = re.compile(r"(?i)(?:релиз|верси|version|release|build|сборк|платформ)\w*\s*[:=]?\s*[\"'«]?\s*$")
 DOC_NUMBER = re.compile(r"(?i)(?:договор\w*|контракт\w*|соглашени\w*|счёт\w*|счет\w*|заявк\w*|заявлени\w*|инцидент\w*|кп|коммерческ\w+ предложени\w+|заказ\w*|акт\w*|дел[оау]\w*|"
                         r"материал\w*(?:\s+проверки)?|реестр\w*(?:\s+за)?|выписк\w*|диплом\w*|обращени\w*|сертификат\w*)\s*(?:№|N|#|номер)\s*(?P<v>[A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9/._-]{0,40})")
+TICKET_ID = re.compile(r"(?i)\b(?:заявк\w*|инцидент\w*|обращени\w*|заказ\w*|тикет\w*|ticket|incident)"
+                       r"[ \t:№#«\"'-]{1,8}(?P<v>[A-ZА-ЯЁ]{2,12}(?:[-/][A-ZА-ЯЁ]{2,12})?[-/]\d{2,4}[-/]\d{2,9})\b")
 MONEY = re.compile(r"(?i)(?<![\w.])(?P<v>\d{1,3}(?:[\s ]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s*(?:(?:тыс(?:яч\w*)?|млн|миллион\w*|млрд|миллиард\w*|k|m)\.?\s*)?(?:руб\w*|₽|р\.|долл\w*|\$|usd|евро|€|eur)(?![\w])"
                    r"|(?:\$|€|₽)\s?(?P<v2>\d[\d\s .,]*\d)")
 ADDRESS_INDEX = re.compile(r"(?<!\d)\d{6},?\s+[А-ЯЁ][а-яё-]+[^\n;|]{3,80}?(?:кв\.?|квартира|оф\.?|офис|д\.)\s*\d+")
@@ -293,6 +295,8 @@ def find_structured(text: str, *, internal_domains: Iterable[str] = (), public_d
         if re.fullmatch(r"[АA]\d{2}-\d+/\d{4}", m.group("v")):
             continue                                     # номер арбитражного дела (А40-55123/2026) — открытые сведения картотеки суда
         add(*_v(m), "doc_number", "document_number")
+    for m in TICKET_ID.finditer(text):
+        add(*_v(m), "doc_number", "ticket_id")
     for rx in (MONEY_CTX, PERCENT_CTX):
         for m in rx.finditer(text):
             if not _PUBLIC_PRICE.search(text[max(0, m.start() - 60):m.start("v")]):

@@ -114,6 +114,65 @@ def test_publication_and_concurrent_arrival(tmp_path, monkeypatch):
         assert not list(tmp_path.glob("*.part"))
 
 
+def test_redacted_publication_retires_only_its_own_snapshot(tmp_path, monkeypatch):
+    resource = {"kind": "local", "path": ""}
+    with ws.open_storage(resource, "", tmp_path) as store:
+        name = "document.txt"
+        old = b"old redaction"
+        store.publish_text(name, old.decode())
+        snap = store.stat(name)
+        options = dict(previous_sha256=digest(old), previous_document=snap)
+        store.publish_text(name, "new redaction", **options)
+        store.publish_text(name, "new redaction", **options)
+        assert (tmp_path / name).read_text() == "new redaction"
+        assert not any(p.read_bytes() == old for p in tmp_path.rglob("*") if p.is_file())
+
+        snap = store.stat(name)
+        current_sha = digest((tmp_path / name).read_bytes())
+        (tmp_path / "another").write_text("new redaction")
+        os.replace(tmp_path / "another", tmp_path / name)
+        with pytest.raises(FileExistsError):
+            store.publish_text(name, "next", previous_sha256=current_sha, previous_document=snap)
+        assert (tmp_path / name).read_text() == "new redaction"
+
+        actual = store.stat(name)
+        move = ws._Local.move
+        def arrive(directory, source, to):
+            if to == name:
+                (tmp_path / name).write_text("independent document")
+            move(directory, source, to)
+        monkeypatch.setattr(ws._Local, "move", arrive)
+        with pytest.raises(FileExistsError):
+            store.publish_text(name, "next", previous_sha256=current_sha, previous_document=actual)
+        assert (tmp_path / name).read_text() == "independent document"
+
+
+def test_redacted_publication_recovers_interrupted_capture(tmp_path):
+    resource = {"kind": "local", "path": ""}
+    with ws.open_storage(resource, "", tmp_path) as store:
+        name = "result.txt"
+        old = b"obsolete result"
+        store.publish_text(name, old.decode())
+        options = dict(previous_sha256=digest(old), previous_document=store.stat(name))
+        pid = os.fork()
+        if pid == 0:
+            rename = ws._move
+            def interrupt(src_fd, src, dst_fd, dst):
+                rename(src_fd, src, dst_fd, dst)
+                if src == name:
+                    os._exit(57)
+            ws._move = interrupt
+            try:
+                store.publish_text(name, "verified", **options)
+            finally:
+                os._exit(58)
+        assert os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]) == 57
+        assert not (tmp_path / name).exists()
+        store.publish_text(name, "verified", **options)
+        assert (tmp_path / name).read_text() == "verified"
+        assert not any(p.read_bytes() == old for p in tmp_path.rglob("*") if p.is_file())
+
+
 @pytest.mark.skipif(os.getenv("ISMANAGER_LIVE_SMB") != "1", reason="requires a local Docker daemon")
 def test_live_samba(tmp_path):
     """ISMANAGER_LIVE_SMB=1 python -m pytest -q tests/test_watch_storage.py"""
@@ -163,6 +222,14 @@ def test_live_samba(tmp_path):
                 out.publish_text("текст.txt", "посторонняя")
             out.publish_text("текст.txt", "вторая", previous_sha256=digest("первая".encode()))
             assert out.read_text("текст.txt") == "вторая"
+            out.publish_text("документ.txt", "устаревшее обезличивание")
+            prior = dict(previous_sha256=digest("устаревшее обезличивание".encode()),
+                         previous_document=out.stat("документ.txt"))
+            out.publish_text("документ.txt", "проверено", **prior)
+            out.publish_text("документ.txt", "проверено", **prior)
+            assert out.read_text("документ.txt") == "проверено"
+            assert not any(s.name.startswith("документ.") and s.name != "документ.txt"
+                           for s in out.list_files({".txt"}))
         with ws.open_storage(cfg, app.secret_key, folder="архив/готово", create=True) as again:
             assert again.identity() == folder_id
             assert again.read_text("текст.txt") == "вторая"

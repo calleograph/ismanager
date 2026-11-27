@@ -1,16 +1,40 @@
 {% extends 'base.html' %}{% block title %}Система{% endblock %}{% block content %}<h1>Администрирование</h1>
 <section class="panel"><div class="row"><h2>Каталоги LDAP и AD</h2><a class="btn" href="{{ url_for('admin.profile') }}">Добавить подключение</a></div>
-{% for item in profiles %}<p><a href="{{ url_for('admin.profile',profile_id=item.id) }}">{{ item.name }}</a> · {{ 'Включено' if item.enabled else 'Отключено' }}</p>{% else %}<p>Подключите каталог для входа сотрудников. Локальный администратор доступен независимо от каталога.</p>{% endfor %}</section>
+{% for item in profiles %}<p><a href="{{ url_for('admin.profile',profile_id=item.id) }}">{{ item.name }}</a> · {{ 'Включено' if item.enabled else 'Отключено' }}</p>{% else %}<p>Подключите каталог для входа администраторов. Локальный администратор доступен независимо от каталога.</p>{% endfor %}</section>
 <section class="panel"><h2>Сетевой доступ</h2>
 {% set mode = config.ACCESS_MODE %}
-<p>{{ {'http':'Прямой HTTP в локальной сети', 'proxy':'HTTPS через обратный прокси', 'https':'Прямой HTTPS'}.get(mode) }} · <code>{{ config.PUBLIC_URL }}</code></p>
-{% if mode == 'http' %}<p>Соединение открытое. Используйте этот адрес в доверенной сети или через VPN.</p>{% endif %}</section>
+<p>{{ {'http':'Прямой HTTP в локальной сети', 'proxy':('HTTP' if config.PUBLIC_URL.startswith('http://') else 'HTTPS') + ' через обратный прокси', 'https':'Прямой HTTPS'}.get(mode) }} · <code>{{ config.PUBLIC_URL }}</code></p>
+{% if config.PUBLIC_URL.startswith('http://') %}<p>Соединение открытое. Используйте этот адрес в доверенной сети или через VPN.</p>{% endif %}</section>
 <section class="panel"><h2>Обработчик GigaAM</h2><p>{{ model_status }}</p>
 <p>Записей в очереди — {{ counts.queued }}.</p>
 <div class="actions"><a class="btn secondary" href="{{ url_for('admin.storage') }}">Ресурсы хранения</a>
 <a class="btn secondary" href="{{ url_for('admin.watches') }}">Наблюдение за папками</a></div></section>
-<section class="panel"><h2>Обновления и резервные копии</h2><p>Установлена версия {{ config.VERSION }}. {{ status.get('message','Проверьте наличие релиза на GitHub.') }}</p><form class="actions" method="post" action="{{ url_for('admin.maintenance') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-{% for key, label in [('check','Проверить'),('update','Обновить'),('backup','Создать копию'),('rollback','Откатить версию')] %}<button class="secondary" name="operation" value="{{ key }}" {% if key in ('update','rollback','backup') %}data-confirm="Операция может временно прервать работу приложения. Продолжить?"{% endif %}>{{ label }}</button>{% endfor %}</form></section>
+<section class="panel" data-system-metrics="{{ url_for('admin.system_metrics') }}"><h2>Технические характеристики</h2>
+{% set live = system.live %}{% set resources = live.worker %}
+<table><thead><tr><th>Компонент</th><th>Состояние</th></tr></thead><tbody>
+<tr><th>Процессор сервера</th><td>{{ system.cpu or 'Данные недоступны' }}{% if live.cores %} · {{ live.cores }} логических ядер{% endif %}</td></tr>
+<tr><th>Загрузка CPU сервера</th><td data-machine-cpu>{% if live.cpu %}{{ live.cpu.percent }}% · {{ live.cpu.busy_cores }} из {{ live.cores }} ядер{% else %}Ожидается измерение{% endif %}</td></tr>
+<tr><th>Оперативная память сервера</th><td data-machine-ram>{% if live.total and live.available is not none %}Занято {{ live.total - live.available }} из {{ live.total }} МиБ{% else %}Данные недоступны{% endif %}</td></tr>
+<tr><th>CPU обработчика GigaAM</th><td data-worker-cpu>{% if resources.busy_cores is defined %}{{ resources.busy_cores }} из {{ resources.cores }} ядер{% else %}Ожидается измерение{% endif %}</td></tr>
+<tr><th>RAM обработчика GigaAM</th><td data-worker-ram>{% if resources.memory_mib is defined %}{{ resources.memory_mib }}{% if resources.capacity_mib is defined %} из {{ resources.capacity_mib }}{% endif %} МиБ{% else %}Ожидается измерение{% endif %}</td></tr>
+<tr><th>Диск с данными</th><td>{{ system.disk_free }} из {{ system.disk_total }} МиБ свободно</td></tr>
+<tr><th>ОС</th><td>Linux {{ system.kernel }} · {{ system.arch }}</td></tr>
+<tr><th>Распознавание</th><td>GigaAM v3 E2E RNNT{% if system.worker.device %} · {{ system.worker.device|upper }} · потоков Torch {{ system.worker.threads }}{% endif %}</td></tr>
+{% for name,version in system.components.items() %}<tr><th>{{ name }}</th><td>{{ version }}</td></tr>{% endfor %}
+</tbody></table></section>
+<section class="panel"><h2>Обновления и резервные копии</h2><p>Установлена версия {{ config.VERSION }}.</p>
+{% if operator in ('ready','busy','legacy') %}
+{% if operator=='legacy' %}<p>Подключён помощник предыдущей версии. Команды доступны. Чтобы видеть его занятость, выполните <code>./install.sh --operator</code> в каталоге установки.</p>{% endif %}
+<p>{{ status.get('message','Помощник подключён.') }}</p><form class="actions" method="post" action="{{ url_for('admin.maintenance') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+{% for key, label in [('check','Проверить'),('update','Обновить'),('backup','Создать копию'),('rollback','Откатить версию')] %}<button class="secondary" name="operation" value="{{ key }}" {% if operator=='busy' %}disabled{% endif %} {% if key in ('update','rollback','backup') %}data-confirm="Операция может временно прервать работу приложения. Продолжить?"{% endif %}>{{ label }}</button>{% endfor %}</form>
+{% else %}
+<p>{{ 'Веб-управление отключено при установке.' if operator=='disabled' else 'Помощник веб-управления не подключён.' }}</p>
+<p>В каталоге установки на сервере:</p>
+<pre>python3 scripts/manage.py check
+python3 scripts/manage.py update
+python3 scripts/manage.py backup</pre>
+<p>Для включения кнопок в этой панели выполните <code>./install.sh --operator</code> от имени владельца установки.</p>
+{% endif %}</section>
 <section class="panel"><h2>Политика входа</h2><form method="post" action="{{ url_for('admin.access') }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="form-grid">
 {% for name,label,lo,hi in [('hours','Срок нового сеанса, ч',1,168),('attempts_user','Неудачных входов для одного логина',3,100),('attempts_ip','Неудачных входов с одного IP',3,500),('minutes','Окно ограничения, мин',1,60)] %}
@@ -19,3 +43,4 @@
 <section class="panel"><div class="row"><h2>Пользователи и сеансы</h2><a class="btn secondary" href="{{ url_for('admin.users') }}">Управление пользователями</a></div>
 <p>Учётных записей — {{ counts.users }}. <a href="{{ url_for('admin.users',active=1) }}">Активных сеансов — {{ counts.sessions }}</a>.</p></section>
 <section class="panel"><div class="row"><h2>Журнал доступа и настроек</h2><a class="btn secondary" href="{{ url_for('admin.journal') }}">Открыть журнал</a></div><table><thead><tr><th>Время UTC</th><th>Событие</th><th>Пользователь</th></tr></thead><tbody>{% for item in events %}<tr><td>{{ item.time }}</td><td>{{ item.event|audit_event }}{% if item.target %} · {{ item.target }}{% endif %}</td><td>{{ item.username or '—' }}</td></tr>{% endfor %}</tbody></table></section>{% endblock %}
+{% block scripts %}<script defer src="{{ url_for('static', filename='system-metrics.js') }}"></script>{% endblock %}

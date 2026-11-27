@@ -31,7 +31,7 @@ BATCH_MAX_TEXT = 2_000_000
 TEXT = {"txt", "log", "md", "csv", "tsv", "json", "yaml", "yml", "xml", "ini", "cfg", "conf", "env"}
 OFFICE = {"docx", "odt", "xlsx", "xlsm", "ods", "xlsb"}
 IMAGES = {"png", "jpeg", "jpg", "tif", "tiff"}
-SUPPORTED = sorted(TEXT | OFFICE | IMAGES | {"html", "htm", "pdf", "xls", "doc", "rtf"})
+SUPPORTED = sorted(TEXT | OFFICE | IMAGES | {"html", "htm", "pdf", "xls", "doc", "rtf", "msg"})
 OD = "{urn:oasis:names:tc:opendocument:xmlns:text:1.0}"
 TAB = "{urn:oasis:names:tc:opendocument:xmlns:table:1.0}"
 OFF = "{urn:oasis:names:tc:opendocument:xmlns:office:1.0}"
@@ -139,28 +139,51 @@ TABLE_CAPTIONS = frozenset({
 })
 
 
+# Property catalogs describe the sensitivity of the value on the same row.
+_ROW_TYPE = re.compile(r"(?:data )?(?:type|category|classification|kind|field)|тип(?: данных)?|категория(?: данных)?|классификация|поле|параметр")
+_ROW_ACTION = re.compile(r"(?:(?:expected|required) )?(?:action|treatment)|(?:(?:ожидаемое|требуемое) )?(?:действие|обработка)")
+_ROW_VALUE = re.compile(r"(?:[a-zа-яё]+ ){0,3}(?:value|значение)|образец|пример")
+_HIDE = re.compile(r"маскир|скры|замен|удал|обезлич|псевдоним|выявлени|не (?:публиков|вывод|передав)|\b(?:hide|mask|redact|replace|remove|protect|pseudonym|flag for review)")
+_SENSITIVE_TYPE = re.compile(r"парол|токен|ключ|сертификат|секрет|уч[её]тн|license|credential|secret|passw|token|cookie|authorization|(?:api|signing|private|access)[ _-]?key|\b(?:pin|otp|jwt|totp)\b")
+
+
 class Table:
     def __init__(self, out):
         self.out = out
         self.secrets = set()
         self.started = False
+        self.value_cols = set()
+        self.type_cols = set()
+        self.action_cols = set()
 
     def row(self, values, merged=None):
         # An ordinary ticket mentioning a forgotten password must not hide every later description.
-        values = list(values)
-        header_row = not self.started or any(str(v).strip().casefold() in TABLE_CAPTIONS for v in values if v)
+        values = [str(v) if v is not None else "" for v in values]
+        labels = [re.sub(r"[ _-]+", " ", v.strip().casefold()) for v in values]
+        value_cols = {i for i, v in enumerate(labels) if _ROW_VALUE.fullmatch(v)}
+        type_cols = {i for i, v in enumerate(labels) if _ROW_TYPE.fullmatch(v)}
+        action_cols = {i for i, v in enumerate(labels) if _ROW_ACTION.fullmatch(v)}
+        schema = value_cols and (type_cols or action_cols)
+        header_row = not self.started or bool(set(labels) & TABLE_CAPTIONS)
+        if schema:
+            self.value_cols, self.type_cols, self.action_cols = value_cols, type_cols, action_cols
+        row_sensitive = any(
+            (col in self.type_cols and _SENSITIVE_TYPE.search(v))
+            or (col in self.action_cols and _HIDE.search(v)
+                and not re.search(r"(?:не |do not )(?:маскир|скры|удал|замен|mask|redact)", v))
+            for col, v in enumerate(labels)
+        )
         fields = []
-        for col, cell in enumerate(values):
-            value = str(cell) if cell is not None else ""
+        for col, value in enumerate(values):
             flat = re.sub(r"\r\n|[\r\n\t]", " ", value)
-            if col in self.secrets:
+            if not schema and (col in self.secrets or (row_sensitive and col in self.value_cols)):
                 if value.strip() and value.strip() != MASK:
                     self.out.masked_cells += 1
                     self.out.remember(value)
                     if flat != value:
                         self.out.remember(flat)
                 flat = MASK if value.strip() else ""
-            elif header(value, header_row):
+            elif not self.value_cols and header(value, header_row):
                 last = merged.get(col, col) if merged else col
                 self.secrets.update(range(col, last + 1))
             fields.append(flat)
@@ -499,6 +522,44 @@ def legacy_sheet(data, out):
     return ""
 
 
+def word_blocks(node, w, out):
+    if node.tag == w + "p":
+        out.append("".join(x.text or "" if x.tag in (w + "t", w + "delText", w + "instrText")
+                           else "\n" if x.tag in (w + "br", w + "cr") else "\t" if x.tag == w + "tab" else ""
+                           for x in node.iter()))
+        return
+    if node.tag != w + "tbl":
+        for child in node:
+            word_blocks(child, w, out)
+        return
+    table = Table(out)
+    for tr in node:
+        if tr.tag != w + "tr":
+            word_blocks(tr, w, out)
+            continue
+        cells = tr.findall(w + "tc")
+        if len(cells) == 1:
+            # Code listings are often kept inside one cell spanning many paragraphs.
+            word_blocks(cells[0], w, out)
+            continue
+        values = []
+        merged = {}
+        for cell in cells:
+            local = Projection(out.limit)
+            word_blocks(cell, w, local)
+            for secret in local.secret_values:
+                out.remember(secret)
+            out.masked_cells += local.masked_cells
+            span = cell.find("./" + w + "tcPr/" + w + "gridSpan")
+            width = int(span.get(w + "val", "1")) if span is not None else 1
+            if width < 1 or len(values) + width > 16384:
+                raise FileError("Недопустимая ширина ячейки Word.")
+            if width > 1:
+                merged[len(values)] = len(values) + width - 1
+            values.extend(["\n".join(local.lines)] + [""] * (width - 1))
+        table.row(values, merged)
+
+
 def office(ext, data, out, batch):
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         archive_limits(archive, batch)
@@ -524,19 +585,7 @@ def office(ext, data, out, batch):
                     "{http://purl.oclc.org/ooxml/wordprocessingml/main}",
                 ):
                     raise FileError("Неподдерживаемый тип документа Word.")
-                for p in root.iter(w + "p"):
-                    out.append(
-                        "".join(
-                            x.text or ""
-                            if x.tag in (w + "t", w + "delText", w + "instrText")
-                            else "\n"
-                            if x.tag == w + "br"
-                            else "\t"
-                            if x.tag == w + "tab"
-                            else ""
-                            for x in p.iter()
-                        )
-                    )
+                word_blocks(root, w, out)
         images = any(
             n.startswith(("word/media/", "Pictures/", "xl/media/")) and not n.endswith("/")
             for n in archive.namelist()
@@ -613,7 +662,7 @@ def ocr(path):
     return run_tool(["tesseract", str(path), "stdout", "-l", "rus+eng"], timeout=90).decode("utf-8").strip()
 
 
-def media(ext, data, out, batch):
+def media(ext, data, out, batch, *, inline=False):
     with tempfile.TemporaryDirectory(prefix="ismanager-ocr-") as directory:
         path = Path(directory) / ("input." + ext)
         path.write_bytes(data)
@@ -628,6 +677,16 @@ def media(ext, data, out, batch):
             if not data.startswith(signatures[ext]):
                 raise FileError("Содержимое файла не соответствует формату изображения.")
             text = ocr(path)
+            if inline and not text:
+                from PIL import Image
+
+                with Image.open(path) as image:
+                    width, height = image.size
+                    image.verify()
+                text = run_tool(["tesseract", str(path), "stdout", "-l", "rus+eng", "--psm", "11"],
+                                timeout=90).decode("utf-8").strip()
+                if not text and width <= 512 and height <= 160:
+                    return "В небольшом встроенном изображении письма OCR не распознал текст."
             if not text:
                 raise FileError("OCR не смог прочитать текст. Проверьте качество изображения.")
             out.append(text)
@@ -693,6 +752,101 @@ def media(ext, data, out, batch):
         return "Использован OCR. Проверьте имена и цифры." if had_ocr else ""
 
 
+def outlook(data, out, batch):
+    import olefile
+
+    if not data.startswith(OLE):
+        raise FileError("Файл не является письмом Outlook MSG.")
+    with olefile.OleFileIO(io.BytesIO(data)) as mail:
+        if not mail.exists("__properties_version1.0"):
+            raise FileError("Отсутствуют свойства письма Outlook.")
+
+        def binary(folder, prop):
+            path = folder + ["__substg1.0_" + prop]
+            return mail.openstream(path).read() if mail.exists(path) else b""
+
+        def string(folder, prop):
+            wide = binary(folder, prop + "001F")
+            if wide:
+                return safe_text(wide.decode("utf-16-le").rstrip("\0"))
+            raw = binary(folder, prop + "001E").rstrip(b"\0")
+            return decode_text(raw) if raw else ""
+
+        for prop in ("0037", "0C1A", "0C1F", "0E04", "0E03", "0E02"):
+            value = string([], prop)
+            if value:
+                out.append(value)
+        body = string([], "1000")
+        if body:
+            out.append(body)
+        else:
+            html = string([], "1013") or decode_text(binary([], "10130102"))
+            if not html:
+                raise FileError("Нет доступного текстового или HTML-тела письма. Экспортируйте письмо в PDF.")
+            parser = VisibleText(out)
+            parser.feed(html)
+            parser.finish()
+        notes = []
+        folders = [p for p in mail.listdir(streams=False, storages=True)
+                   if len(p) == 1 and p[0].startswith("__attach_version1.0_#")]
+        if len(folders) > 64:
+            raise FileError("В письме более 64 вложений.")
+        for number, folder in enumerate(folders, 1):
+            name = string(folder, "3707") or string(folder, "3704")
+            ext = Path(name).suffix.lower().lstrip(".")
+            payload = binary(folder, "37010102")
+            if not payload or ext not in SUPPORTED or ext == "msg":
+                raise FileError("Недоступное или неподдерживаемое вложение MSG. Экспортируйте его отдельно.")
+            out.append(f"Вложение {number}")
+            if ext in IMAGES and string(folder, "3712"):
+                note = media(ext, payload, out, batch, inline=True)
+            else:
+                # The same projection propagates masked cell values to the entire message.
+                child = Projection(out.limit)
+                note = project_document(ext, payload, child, batch)
+                if not any(v.strip() for v in child.lines):
+                    raise FileError("Во вложении отсутствует доступный текст.")
+                for value in child.secret_values:
+                    out.remember(value)
+                for value in child.lines:
+                    out.append(value)
+                out.masked_cells += child.masked_cells
+            if note and note not in notes:
+                notes.append(note)
+        return " ".join(notes)
+
+
+def project_document(ext, data, out, batch):
+    note = ""
+    if ext == "msg":
+        note = outlook(data, out, batch)
+    elif ext in OFFICE:
+        note = office(ext, data, out, batch)
+    elif ext == "xls":
+        note = legacy_sheet(data, out)
+    elif ext in ("doc", "rtf"):
+        text = legacy_doc(ext, data)
+        if not re.sub(r"\[pic\]", "", text, flags=re.IGNORECASE).strip():
+            raise FileError("В документе Word нет читаемого текста. Загрузите изображение для OCR.")
+        out.append(text)
+        note = "Извлечён текст Word. Встроенные изображения требуют отдельного OCR."
+    elif ext in IMAGES or ext == "pdf":
+        note = media(ext, data, out, batch)
+    elif ext == "xml" and "urn:schemas-microsoft-com:office:spreadsheet" in decode_text(data)[:32768]:
+        note = legacy_sheet(data, out)
+    elif ext in ("csv", "tsv"):
+        delimited(ext, decode_text(data), out)
+    elif ext in ("html", "htm"):
+        parser = VisibleText(out)
+        parser.feed(decode_text(data))
+        parser.finish()
+    else:
+        out.append(decode_text(data))
+    if ext in ("xlsx", "xlsm", "xlsb", "xls", "ods") and not out.has_table_data:
+        raise FileError("Книга не содержит доступных для чтения ячеек.")
+    return note
+
+
 def extract(ext, data, *, batch=False):
     value, note, _ = _extract_with_count(ext, data, batch=batch)
     return value, note
@@ -708,30 +862,7 @@ def _extract_with_count(ext, data, *, batch):
     out = Projection(BATCH_MAX_TEXT if batch else MAX_TEXT)
     note = ""
     try:
-        if ext in OFFICE:
-            note = office(ext, data, out, batch)
-        elif ext == "xls":
-            note = legacy_sheet(data, out)
-        elif ext in ("doc", "rtf"):
-            text = legacy_doc(ext, data)
-            if not re.sub(r"\[pic\]", "", text, flags=re.IGNORECASE).strip():
-                raise FileError("В документе Word нет читаемого текста. Загрузите изображение для OCR.")
-            out.append(text)
-            note = "Извлечён текст Word. Встроенные изображения требуют отдельного OCR."
-        elif ext in IMAGES or ext == "pdf":
-            note = media(ext, data, out, batch)
-        elif ext == "xml" and "urn:schemas-microsoft-com:office:spreadsheet" in decode_text(data)[:32768]:
-            note = legacy_sheet(data, out)
-        elif ext in ("csv", "tsv"):
-            delimited(ext, decode_text(data), out)
-        elif ext in ("html", "htm"):
-            parser = VisibleText(out)
-            parser.feed(decode_text(data))
-            parser.finish()
-        else:
-            out.append(decode_text(data))
-        if ext in ("xlsx", "xlsm", "xlsb", "xls", "ods") and not out.has_table_data:
-            raise FileError("Книга не содержит доступных для чтения ячеек.")
+        note = project_document(ext, data, out, batch)
         value, masked_count = out.finish()
         if not value.strip():
             raise FileError("Документ не содержит доступного для чтения текста.")

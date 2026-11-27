@@ -14,6 +14,7 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
+from threading import Event, Thread
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE = ROOT / ".runtime"
@@ -61,17 +62,50 @@ def compose(*args, **kwargs):
 
 
 def build():
+    buildx = subprocess.run(["docker", "buildx", "version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    if buildx:
+        builder = ["docker", "buildx", "build", "--load", "--progress=plain"]
+        env = os.environ
+    else:
+        print("Buildx недоступен. Собираем через прежний docker build. Если Docker отключил этот сборщик, установите плагин Buildx.", flush=True)
+        builder = ["docker", "build"]
+        env = {**os.environ, "DOCKER_BUILDKIT": "0"}
     for service, file in (("worker", "Dockerfile.worker"), ("web", "Dockerfile")):
+        print("Сборка " + ("обработчика GigaAM" if service == "worker" else "веб-приложения и обезличивателя"), flush=True)
         source = settings().get("TORCH_INDEX_URL") if service == "worker" else None
         args = ["--build-arg", "TORCH_INDEX_URL=" + source] if source else []
-        run("docker", "build", *args, "-f", file, "-t", image(service), ".")
+        run(*builder, *args, "-f", file, "-t", image(service), ".", env=env)
+
+
+def report_model_preparation(finished, started):
+    last = None
+    while not finished.wait(5):
+        try:
+            raw = compose("exec", "-T", "web", "head", "-c", "1024", "/data/asr-status.json",
+                          capture=True, stderr=subprocess.DEVNULL, timeout=4)
+            state = json.loads(raw)
+            label = state["label"]
+            if state["time"] >= started and isinstance(label, str) and label != last:
+                print(label, flush=True)
+                last = label
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+            continue  # The web container and status file appear during this same startup.
 
 
 def start():
     cfg = settings()
     if cfg.get("APP_REVISION") != revision():
         save_config({**cfg, "APP_REVISION": revision()})
-    compose("up", "--no-build", "--pull", "never", "-d", "--wait", "--wait-timeout", "1800")
+    print("Подготовка моделей GigaAM. При первой установке worker скачивает веса. Ожидаем готовность сервисов.", flush=True)
+    finished = Event()
+    reporter = Thread(target=report_model_preparation, args=(finished, time.time()), daemon=True)
+    reporter.start()
+    try:
+        compose("up", "--no-build", "--pull", "never", "-d", "--wait", "--wait-timeout", "1800")
+        print("Сервисы готовы.", flush=True)
+    finally:
+        finished.set()
+        reporter.join()
 
 
 def backup():

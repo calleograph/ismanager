@@ -19,14 +19,19 @@ def test_ad_login(tmp_path, protocol, port):
                 host=os.environ["TEST_DC"], port=str(port), protocol=protocol, timeout="5",
                 bind_dn="CN=service,CN=Users," + base, password=os.environ["SERVICE_PASS"],
                 base_dn=base, enabled="on", ca=Path(os.environ["TEST_CA"]).read_text(),
-                user_groups="CN=Readers,CN=Users," + base, action="save")
+                admin_groups="CN=Readers,CN=Users," + base, action="save")
     directory = "/admin/directory/"
     saved = admin.post(directory, data={**form, "csrf_token": token(admin.get(directory))})
     assert saved.status_code == 302
     page = directory + "1"
+    groups = admin.get(page + "/principals", query_string={"q": "Reade"}).json["items"]
+    assert any(g["kind"] == "group" and g["id"].casefold() == form["admin_groups"].casefold() for g in groups)
+    people = admin.get(page + "/principals", query_string={"q": "outsid"}).json["items"]
+    direct = next(p for p in people if p["kind"] == "user" and p["login"] == "outsider")
+    assert UUID(direct["id"])
     diagnosed = admin.post(page, data=dict(action="test", test_user="analyst", test_password=os.environ["USER_PASS"],
                                            csrf_token=token(admin.get(page))))
-    assert "Допуск разрешён" in diagnosed.get_data(as_text=True)
+    assert "Администратор" in diagnosed.get_data(as_text=True)
 
     def sign_in(name, password):
         client = app.test_client()
@@ -38,7 +43,7 @@ def test_ad_login(tmp_path, protocol, port):
         client, status = sign_in(login, os.environ["USER_PASS"])
         assert status == 302
         assert client.get("/").status_code == 200
-        assert client.get("/admin/").status_code == 403
+        assert client.get("/admin/").status_code == 200
     assert sign_in("outsider", os.environ["USER_PASS"])[1] == 401
     assert sign_in("analyst", secrets.token_urlsafe(20))[1] == 401
     with app.app_context():
@@ -49,11 +54,16 @@ def test_ad_login(tmp_path, protocol, port):
     access_path = f"/admin/users/{user_id}/access"
     for action in ("disable", "enable"):
         assert admin.post(access_path, data={"action": action, "csrf_token": token(admin.get("/admin/users/"))}).status_code == 302
-        assert client.get("/").status_code == 302
+        assert client.get("/admin/").status_code == 302
         client, status = sign_in("EXAMPLE\\analyst", os.environ["USER_PASS"])
         assert status == (401 if action == "disable" else 302)
+    direct_form = {**form, "admin_groups": "", "admin_user": direct["id"] + "|" + direct["label"]}
+    assert admin.post(page, data={**direct_form, "csrf_token": token(admin.get(page))}).status_code == 302
+    assert sign_in("analyst", os.environ["USER_PASS"])[1] == 401
+    client, status = sign_in("outsider", os.environ["USER_PASS"])
+    assert status == 302 and client.get("/admin/").status_code == 200
     # Removing the fixture CA must revoke the session and reject the untrusted certificate.
     changed = admin.post(page, data={**form, "ca": "", "csrf_token": token(admin.get(page))})
     assert changed.status_code == 302
-    assert client.get("/").status_code == 302
+    assert client.get("/admin/").status_code == 302
     assert sign_in("analyst", os.environ["USER_PASS"])[1] == 401

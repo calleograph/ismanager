@@ -1,0 +1,55 @@
+.pass-intro h1{font-size:clamp(25px,3vw,38px);margin-bottom:12px}
+.pass-advice{padding:0 0 0 12px;border-left:3px solid #db7671;margin:0 0 22px}
+.pass-advice a{color:#a33b37;font-size:.76rem;font-weight:750;letter-spacing:.035em;text-decoration:none;text-transform:uppercase}
+[data-theme=dark] .pass-advice a{color:#ffaaa6}
+.pass-advice a:hover{text-decoration:underline}
+.pass-advice p,.pass-engine p,#pass-status,.pass-scale,.pass-preview,.pass-result-head p,#pass-empty{color:var(--muted)}
+.pass-advice p,.pass-engine p{margin:.2rem 0;font-size:.9rem}
+.pass-workspace{display:grid;grid-template-columns:minmax(340px,.86fr) minmax(0,1.14fr);align-items:start;gap:18px}
+.pass-workspace .panel{margin:0;padding:clamp(16px,2vw,24px);min-width:0}
+.pass-tabs,.pass-positions,.pass-checks{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px}
+.pass-tabs{padding:4px;border-radius:11px;background:var(--soft)}
+.pass-tabs button,.pass-positions span{padding:8px 2px;font-size:.82rem;line-height:1.25;text-align:center;min-height:35px}
+.pass-tabs button{color:var(--muted);background:transparent;border-radius:8px}
+.pass-tabs button[aria-selected=true]{background:var(--surface);color:var(--accent);box-shadow:0 1px 4px #152e5628}
+.pass-controls [role=tabpanel]{margin:17px 0;color:var(--muted)}
+.pass-controls [role=tabpanel] strong,.pass-controls label,.pass-controls legend{color:var(--text)}
+.pass-controls fieldset{padding:0;margin:18px 0;border:0}
+.pass-controls legend,.pass-range,.pass-controls label.field{font-weight:650}
+.pass-controls legend{margin-bottom:7px}
+.pass-range{display:grid;grid-template-columns:1fr auto;align-items:center}
+.pass-range input{grid-column:1/-1;accent-color:var(--accent);width:100%;margin:8px 0 0}
+.pass-range output{border-radius:7px;background:var(--tint);color:var(--accent);padding:2px 8px}
+.pass-scale{display:flex;justify-content:space-between;font-size:.75rem}
+.pass-positions label,.pass-checks label{position:relative;cursor:pointer}
+.pass-positions input{position:absolute;opacity:0}
+.pass-positions span,.pass-checks label{display:block;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.pass-positions :checked+span,.pass-checks label:has(:checked){color:var(--accent);border-color:var(--accent);background:var(--tint)}
+.pass-positions input:focus-visible+span{outline:3px solid var(--accent);outline-offset:2px}
+.pass-checks label{padding:5px;text-align:center}
+.pass-checks small,.pass-row small{display:block}.pass-controls .field{margin-top:12px}
+#pass-generate{width:100%;justify-content:space-between}
+.pass-engine{margin:12px 0 0;font-size:.86rem}
+.pass-result-head,.pass-result-head>div:last-child,.pass-row,.pass-row>div:last-child{display:flex;align-items:center;gap:5px}
+.pass-result-head,.pass-row{justify-content:space-between}
+.pass-result-head p{font-size:.74rem;letter-spacing:.065em;text-transform:uppercase;font-weight:700;margin:0 0 3px}
+.pass-result-head h2{font-size:clamp(19px,2vw,25px);margin:0}
+.pass-result-head button,.pass-row button{padding:7px}
+.pass-workspace .icon{width:17px;height:17px}
+#pass-results{list-style:none;margin:14px 0 0;padding:0}
+#pass-results li{padding:10px 0;border-top:1px solid var(--line)}
+.pass-row>div:first-child{min-width:0}.pass-row>div:last-child{flex-shrink:0}
+.pass-row code{font-size:1.08rem;font-weight:650;word-break:break-all}
+.pass-row small{margin-top:2px}
+.pass-breakdown{margin:6px 0;padding:8px 12px;background:var(--soft);border-radius:8px;font-size:.9rem}
+.pass-breakdown p,#pass-status{margin:.35em 0}
+#pass-status{font-size:.85rem}#pass-status:empty{display:none}
+@media(max-width:820px){.pass-workspace{grid-template-columns:1fr}.pass-workspace .panel{overflow:visible}}
+@media(max-width:420px){.pass-workspace .panel{padding:12px}.pass-tabs button{font-size:.74rem}.pass-result-head{flex-wrap:wrap}.pass-result-head h2{font-size:19px}}
+.pass-advice{position:relative;padding-right:67px}
+#pass-tip,#pass-rotation{position:absolute;right:0;top:0;width:28px;height:28px;padding:5px;color:var(--muted)}
+#pass-rotation{right:30px}#pass-tip .icon,#pass-rotation .icon{width:15px;height:15px}
+#pass-rotation[aria-pressed=true] .icon,#pass-rotation[aria-pressed=false] span{display:none}
+.pass-salt{color:#a33b37}[data-theme=dark] .pass-salt{color:#ffaaa6}
+.pass-breakdown dl{display:grid;grid-template-columns:minmax(85px,auto) 1fr;gap:3px 10px;margin:5px 0 0}
+.pass-breakdown dt{color:var(--muted)}.pass-breakdown dd{margin:0}

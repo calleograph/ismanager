@@ -169,15 +169,21 @@ def transcribe(path, engine, progress, *, timed=False):
     from silero_vad import get_speech_timestamps
 
     duration = probe(path)
+    progress(0, 0)
     vad, model = engine
     lines = []
     pending = bytearray()
     consumed = 0
     previous_end = None
     block_bytes = RATE * 2 * 45
+    last_report = time.monotonic()
+
+    def report(samples):
+        seconds = int(samples / RATE)
+        progress(seconds, min(99, int(seconds / duration * 100)) if duration else 0)
 
     def process(final):
-        nonlocal consumed, previous_end
+        nonlocal consumed, previous_end, last_report
         pcm = np.frombuffer(pending, dtype="<i2").astype(np.float32) / 32768
         audio = torch.from_numpy(pcm)
         spans = get_speech_timestamps(audio, vad, sampling_rate=RATE, min_speech_duration_ms=250,
@@ -191,6 +197,9 @@ def transcribe(path, engine, progress, *, timed=False):
                 cut = min(cut, start)
                 break
             result = recognize(model, audio[start:end])
+            if time.monotonic() - last_report >= 2:
+                report(consumed + end)
+                last_report = time.monotonic()
             if result:
                 gap = (consumed + start - previous_end) / RATE if previous_end is not None else 0
                 separator = "\n\n" if gap >= 2 else " "
@@ -201,8 +210,7 @@ def transcribe(path, engine, progress, *, timed=False):
                 previous_end = consumed + end
         consumed += cut
         del pending[:cut * 2]
-        seconds = int(consumed / RATE)
-        progress(seconds, min(99, int(seconds / duration * 100)) if duration else 0)
+        report(consumed)
 
     with closing(decode(path)) as audio_stream:
         for chunk in audio_stream:
@@ -223,6 +231,9 @@ def recover(db):
         db.execute("""
             UPDATE transcripts SET status=CASE WHEN recoveries=0 THEN 'queued' ELSE 'failed' END,
                 progress=0,seconds=0,recoveries=recoveries+1,
+                finished_at=CASE WHEN recoveries>0 THEN unixepoch() END,
+                started_at=CASE WHEN recoveries>0 THEN started_at END,
+                recognizing_at=CASE WHEN recoveries>0 THEN recognizing_at END,
                 error=CASE WHEN recoveries=0 THEN '' ELSE 'Обработка повторно прервалась. Проверьте журнал worker и повторите.' END
             WHERE status='running'
         """)
@@ -237,7 +248,8 @@ def work(db, data_dir, engine):
 
     def progress(seconds, percent):
         with db:
-            db.execute("UPDATE transcripts SET seconds=?,progress=? WHERE id=?", (seconds, percent, job_id))
+            db.execute("UPDATE transcripts SET seconds=?,progress=?,recognizing_at=coalesce(recognizing_at,unixepoch()) WHERE id=?",
+                       (seconds, percent, job_id))
         status(data_dir, "GigaAM обрабатывает запись", True)
 
     try:
@@ -248,16 +260,16 @@ def work(db, data_dir, engine):
         LOG.error("Recording %s failed (%s)", job_id, type(exc).__name__)
         error = str(exc) if isinstance(exc, RecordingError) else "Сбой распознавания. Проверьте сервис worker и повторите."
         with db:
-            db.execute("UPDATE transcripts SET status='failed',error=? WHERE id=?", (error, job_id))
+            db.execute("UPDATE transcripts SET status='failed',finished_at=unixepoch(),error=? WHERE id=?", (error, job_id))
     else:
         with db:
-            db.execute("UPDATE transcripts SET status='done',progress=100,original=?,body=? WHERE id=?",
+            db.execute("UPDATE transcripts SET status='done',finished_at=unixepoch(),progress=100,original=?,body=? WHERE id=?",
                        (text, text, job_id))
     return True
 
 
 def main():
-    from . import folder_watch
+    from . import folder_watch, telemetry
 
     data = Path(os.getenv("DATA_DIR", "/data"))
     if sys.argv[1:] == ["health"]:
@@ -271,6 +283,7 @@ def main():
     with (data / "asr-worker.lock").open("a") as lock:
         # Only the holder may reclaim interrupted work after a container restart.
         fcntl.flock(lock, fcntl.LOCK_EX)
+        threading.Thread(target=telemetry.publish_worker, args=(data,), daemon=True, name="asr-resources").start()
         database = os.getenv("DATABASE") or data / "ismanager.sqlite3"
         db = folder_watch.connect(database)
         init_db(db)
@@ -301,7 +314,7 @@ def main():
             try:
                 if resume_after_lock:
                     with db:
-                        db.execute("UPDATE transcripts SET status='queued' WHERE status='running'")
+                        db.execute("UPDATE transcripts SET status='queued',started_at=NULL,recognizing_at=NULL WHERE status='running'")
                     folder_watch.recover(db, data)
                     resume_after_lock = False
                 uploaded = work(db, data, engine)

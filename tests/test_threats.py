@@ -100,7 +100,7 @@ class ThreatWorkflow(unittest.TestCase):
         self.app.register_blueprint(threats.bp)
         self.app.jinja_loader = ChoiceLoader(
             [
-                DictLoader({"base.html": "{% block content %}{% endblock %}"}),
+                DictLoader({"base.html": "{% macro icon(name) %}{% endmacro %}{% block content %}{% endblock %}"}),
                 FileSystemLoader(Path(threats.__file__).parent / "templates"),
             ]
         )
@@ -119,6 +119,36 @@ class ThreatWorkflow(unittest.TestCase):
             )
             threats.init_db(d)
         self.client = self.app.test_client()
+
+    def test_first_step_import_revision_and_owner(self):
+        self.assertIn("Профиль системы", self.client.get("/threats/").text)
+        response = self.client.post("/threats/new", data={"action": "next", "objectType": "ispdn"})
+        self.assertEqual(response.status_code, 422)
+        response = self.client.post("/threats/new", data={
+            "action": "next", "objectType": "ispdn", "systemType": "crm",
+            "systemNetworkCondition": "corporate_internet", "flags": "high_staff_turnover",
+        })
+        self.assertEqual(response.location, "/threats/1/2")
+
+        def upload(revision, sheet):
+            return self.client.post("/threats/1/1", data={
+                "action": "import", "revision": revision, "sheet": (sheet, "data.xlsx"),
+            })
+
+        self.assertEqual(upload(1, io.BytesIO(b"bad")).status_code, 422)
+        self.owner = 2
+        self.assertEqual(upload(1, workbook(SAMPLE)).status_code, 404)
+        self.owner = 1
+        self.assertEqual(upload(1, workbook(SAMPLE)).location, "/threats/1/1")
+        self.assertEqual(upload(1, workbook(SAMPLE)).status_code, 409)
+        self.assertEqual(self.client.post("/threats/1/2", data={"jump": "11", "revision": 2}).status_code, 400)
+        with self.app.app_context():
+            rows = get_db().execute("SELECT stage,data,revision FROM threat_models").fetchall()
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertEqual((row["stage"], row["revision"]), (2, 2))
+            self.assertIn("high_staff_turnover", row["data"])
+            self.assertIn(SAMPLE["infosystemShortName"], row["data"])
 
     def test_wizard_and_documents(self):
         self.assertEqual(self.client.get("/threats/").status_code, 200)

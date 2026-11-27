@@ -15,18 +15,29 @@ while (($#)); do
     --dir) explicit_dir=1; target="$2"; shift 2;;
     --ref) ref="$2"; shift 2;;
     --name) name="$2"; shift 2;;
-    --access|--port|--bind|--host|--trusted-proxy) network_args+=("$1" "${2:?Укажите значение $1}"); shift 2;;
+    --access|--port|--bind|--host|--trusted-proxy|--public-url) network_args+=("$1" "${2:?Укажите значение $1}"); shift 2;;
     --shared-host) shared=1; shift;;
     --operator) operator_only=1; shift;;
     --no-operator) no_operator=1; shift;;
-    --help) echo "install.sh [--dir PATH] [--ref TAG] [--shared-host] [--name NAME] [--access http|proxy|https] [--port PORT] [--bind IPv4] [--host HOST] [--trusted-proxy IP[,IP]] [--no-operator | --operator]"; exit 0;;
+    --help) echo "install.sh [--dir PATH] [--ref TAG] [--shared-host] [--name NAME] [--access http|proxy|https] [--port PORT] [--bind IPv4] [--public-url URL] [--host HOST] [--trusted-proxy IP[,IP]] [--no-operator | --operator]"; exit 0;;
     *) echo "Неизвестный параметр: $1" >&2; exit 2;;
   esac
 done
 here="$(cd "$(dirname "$0")" && pwd)"
-if ! command -v git >/dev/null || ! command -v python3 >/dev/null || ! docker compose version >/dev/null 2>&1; then
+(( !operator_only || !no_operator )) || { echo "Выберите --operator или --no-operator." >&2; exit 2; }
+if ((operator_only)) && [[ -z "$ref" ]] && (("${#network_args[@]}" == 0)); then
+  if ((!explicit_dir)) && [[ -f "$here/scripts/install_operator.py" ]]; then target="$here"; fi
+  [[ -f "$target/.env" && -f "$target/scripts/install_operator.py" ]] || {
+    echo "Укажите --dir существующей установки IS Manager." >&2; exit 2
+  }
+  cd "$target"
+  exec python3 scripts/install_operator.py
+fi
+echo "Проверяем Git, Python, Docker Engine, Compose v2 и Buildx."
+if ! command -v git >/dev/null || ! command -v python3 >/dev/null || ! docker compose version >/dev/null 2>&1 || \
+   { ((!shared && EUID == 0)) && ! docker buildx version >/dev/null 2>&1; }; then
   if ((shared || EUID != 0)); then
-    echo "Для этого режима нужны Git, Python 3.10+, Docker Engine и Docker Compose v2." >&2; exit 1
+    echo "Для этого режима нужны Git, Python 3.10+, Docker Engine и Compose v2. Проверьте docker info и docker compose version." >&2; exit 1
   fi
   source /etc/os-release
   [[ "$ID" == ubuntu ]] || { echo "Автоматическая установка пакетов предусмотрена на Ubuntu."; exit 1; }
@@ -37,9 +48,18 @@ if ! command -v git >/dev/null || ! command -v python3 >/dev/null || ! docker co
     if apt-cache show docker-compose-v2 >/dev/null 2>&1; then apt-get install -y docker-compose-v2
     else apt-get install -y docker-compose-plugin; fi
   fi
+  if ! docker buildx version >/dev/null 2>&1; then
+    buildx_package=docker-buildx
+    if dpkg-query -s docker-ce-cli 2>/dev/null | grep -q '^Status: install ok installed$'; then buildx_package=docker-buildx-plugin; fi
+    if apt-cache show "$buildx_package" >/dev/null 2>&1; then apt-get install -y "$buildx_package"; fi
+  fi
 fi
 python3 -c 'import sys; assert sys.version_info >= (3,10), "Требуется Python 3.10+"'
 docker info >/dev/null
+if ! docker buildx version 2>/dev/null; then
+  echo "Buildx отсутствует. Для сборки будет использован прежний docker build. Чтобы включить Buildx, установите docker-buildx (Ubuntu) или docker-buildx-plugin (репозиторий Docker)." >&2
+fi
+echo "Проверяем каталог установки и версию IS Manager."
 if { ((! explicit_dir)) || [[ "$(realpath -m "$target")" == "$here" ]]; } && [[ -f "$here/scripts/manage.py" && -f "$here/compose.yaml" ]] && git -C "$here" rev-parse --git-dir >/dev/null 2>&1; then
   cd "$here"
 else
@@ -92,6 +112,7 @@ if [[ ! -f scripts/network_config.py ]]; then
 fi
 existing_env=1
 if [[ ! -f .env ]]; then
+  ((! operator_only)) || { echo "Сначала установите приложение или укажите каталог существующей установки." >&2; exit 2; }
   existing_env=0
   [[ "$name" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || { echo "Проверьте имя проекта Compose." >&2; exit 2; }
   if docker volume inspect "${name}_data" >/dev/null 2>&1 || [[ -n "$(docker ps -aq --filter "label=com.docker.compose.project=$name")" ]]; then
@@ -102,6 +123,7 @@ if [[ ! -f .env ]]; then
   [[ -z "${BIND_ADDRESS:-}" ]] || defaults+=(--bind "$BIND_ADDRESS")
   [[ -z "${PORT:-}" ]] || defaults+=(--port "$PORT")
   [[ -z "${PUBLIC_HOST:-}" ]] || defaults+=(--host "$PUBLIC_HOST")
+  [[ -z "${PUBLIC_URL:-}" ]] || defaults+=(--public-url "$PUBLIC_URL")
   [[ -z "${TRUSTED_PROXY_IPS:-}" ]] || defaults+=(--trusted-proxy "$TRUSTED_PROXY_IPS")
   python3 -m scripts.network_config --initialize "$name" "${defaults[@]}" "${network_args[@]}"
 fi
@@ -124,12 +146,23 @@ fi
 if ((existing_env && ${#network_args[@]})); then
   python3 -m scripts.network_config "${network_args[@]}"
 fi
-if ((! no_operator && (!network_only || operator_only || updated))); then
+if ((no_operator)); then
+  if grep -q 'operator-disabled' scripts/install_operator.py; then
+    python3 scripts/install_operator.py --disable
+  else
+    # Previous releases only implemented installation and would ignore --disable.
+    touch .runtime/control/operator-disabled
+    chmod 644 .runtime/control/operator-disabled
+    echo "Управление через CLI · python3 scripts/manage.py check"
+  fi
+elif ((operator_only)) || { [[ ! -f .runtime/control/operator-disabled ]] && ((!network_only || updated)) &&
+     { ((!existing_env)) || [[ -S .runtime/control/operator.sock ]]; }; }; then
   python3 scripts/install_operator.py
 fi
 python3 - <<'PY'
 from scripts.manage import settings
 from app.network import public_url
 cfg = settings()
-print("IS Manager · " + public_url(cfg.get("ACCESS_MODE", "https"), cfg["PUBLIC_HOST"], cfg["PORT"]))
+print("Открыть IS Manager · " + (cfg.get("PUBLIC_URL") or public_url(cfg.get("ACCESS_MODE", "https"), cfg["PUBLIC_HOST"], cfg["PORT"])))
+print(f"Порт приложения на сервере · {cfg['BIND_ADDRESS']}:{cfg['PORT']}")
 PY

@@ -26,6 +26,7 @@ jobs:
       - run: PYTHON=$(command -v python) tests/ldap/run.sh
       - run: PYTHON=$(command -v python) tests/active_directory/run.sh
       - run: CHROMIUM_PATH="$(command -v google-chrome)" python -m tests.live_web
+      - run: CHROMIUM_PATH="$(command -v google-chrome)" python -m tests.live_generators
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -69,6 +70,7 @@ jobs:
           worker=$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q worker)")
           models=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/models"}}{{.Name}}{{end}}{{end}}' "$(docker compose ps -q worker)")
           "$RUNNER_TEMP/network-test/bin/python" -m tests.live_folder_watch "$web" "$worker" "$models"
+          "$RUNNER_TEMP/network-test/bin/python" -m tests.live_http_proxy "$web" "$worker" "$models"
       - name: Back up and restore a new installation
         run: |
           docker compose exec -T web sh -c 'echo before > /data/ci-snapshot'

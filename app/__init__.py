@@ -23,6 +23,7 @@ def create_app(config=None):
         SESSION_COOKIE_SAMESITE="Lax",
         ACCESS_MODE=os.getenv("ACCESS_MODE", "https"),
         PUBLIC_HOST=os.getenv("PUBLIC_HOST", "localhost"),
+        PUBLIC_URL=os.getenv("PUBLIC_URL", ""),
         TRUSTED_PROXY_IPS=os.getenv("TRUSTED_PROXY_IPS", ""),
         PERMANENT_SESSION_LIFETIME=timedelta(days=7),
         MAX_CONTENT_LENGTH=16 * 1024**2,
@@ -34,12 +35,14 @@ def create_app(config=None):
         app.config.update(config)
     mode = app.config["ACCESS_MODE"]
     app.config.setdefault("PUBLIC_PORT", os.getenv("PUBLIC_PORT", "18443" if mode == "https" else "18084"))
-    app.config["PUBLIC_URL"] = network.public_url(mode, app.config["PUBLIC_HOST"], app.config["PUBLIC_PORT"])
+    app.config["PUBLIC_URL"] = network.public_url(mode, app.config["PUBLIC_HOST"], app.config["PUBLIC_PORT"],
+                                                 app.config["PUBLIC_URL"])
     if mode not in network.MODES:
         raise ValueError("ACCESS_MODE должен быть https, http или proxy.")
+    secure = app.config["PUBLIC_URL"].startswith("https://")
     if not config or "SESSION_COOKIE_SECURE" not in config:
-        app.config["SESSION_COOKIE_SECURE"] = mode != "http"
-    if mode == "http":
+        app.config["SESSION_COOKIE_SECURE"] = secure
+    if not secure:
         from flask.sessions import SecureCookieSessionInterface
         app.config["SESSION_COOKIE_NAME"] = "ismanager_http_session"
         app.session_interface = SecureCookieSessionInterface()
@@ -85,10 +88,13 @@ def create_app(config=None):
                 "SELECT users.* FROM users JOIN sessions ON users.id=sessions.user_id "
                 "WHERE token=? AND expires>?", (auth.digest(session["sid"]), int(time.time())),
             ).fetchone()
-        if request.endpoint != "auth.login":
             if g.user is None:
-                return redirect(url_for("auth.login"))
-            if request.endpoint not in {"auth.account", "auth.logout"} and (
+                auth.clear_login()
+        public = request.endpoint == "dashboard" or request.blueprint in {"transcription", "redaction", "passwords", "threats"}
+        if request.endpoint and not public and request.endpoint != "auth.login" and g.user is None:
+            return redirect(url_for("auth.login"))
+        if g.user is not None:
+            if request.endpoint not in {"auth.login", "auth.account", "auth.logout"} and (
                 g.user["must_change"] or (g.user["admin"] and not g.user["totp"] and db.auth_settings()["admin_totp"])
             ):
                 return redirect(url_for("auth.account"))
@@ -100,6 +106,8 @@ def create_app(config=None):
                 session["csrf"].encode(), supplied.encode()
             ):
                 abort(400, description="Форма устарела. Откройте страницу повторно.")
+        if public and g.user is None:
+            g.user = auth.browser_workspace(create=request.method == "POST" and request.blueprint != "passwords")
 
     @app.after_request
     def headers(response):

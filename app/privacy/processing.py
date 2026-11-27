@@ -7,6 +7,7 @@ from .engine import Anonymizer, Policy, PrivacyError, Term
 from .files import MAX_TEXT
 from .verify import independent_check
 from .guard import MASK
+from .known_values import mask_known_values
 from .secrets import mask_explicit_fields
 
 PROFILES = {"faceless": "Полный · Faceless (максимальная строгость)", "strict": "Строгий · Переговорка", "basic": "Базовый · Переговорка"}
@@ -39,11 +40,23 @@ def verified(engine, source):
     policy = engine.policy
     result = engine.process(source)
     if independent_check(result.text, policy):
-        again = engine.process(result.text)
+        labels = {r.replacement for r in result.replacements if r.replacement.startswith("[")}
+        remaining, field_masks = mask_explicit_fields(result.text, ignored_repeats=labels)
+        if field_masks and not independent_check(remaining, policy):
+            result.text = remaining
+            result.field_secret_count += field_masks
+            result.warnings.append("Проведён дополнительный проход.")
+            return result
+        again = engine.process(remaining)
+        # A broad address/organization span can replace the already redacted field
+        # with its own label. Normalize explicit fields on the final text as well.
+        labels.update(r.replacement for r in again.replacements if r.replacement.startswith("["))
+        again.text, final_masks = mask_explicit_fields(again.text, ignored_repeats=labels)
         if independent_check(again.text, policy):
             raise PrivacyError("verification_failed", "Повторная проверка обнаружила остаточные данные. Выдача результата остановлена.")
         result.text = again.text
         result.replacements.extend(again.replacements)
+        result.field_secret_count += field_masks + final_masks
         result.warnings.extend(again.warnings + ["Проведён дополнительный проход."])
     return result
 
@@ -54,7 +67,7 @@ def analyze(source, profile="faceless", glossary="", groups=None):
     policy = policy_for(profile, glossary, groups)
     source, n = mask_explicit_fields(source)
     result = verified(Anonymizer(policy), source)
-    result.field_secret_count = n
+    result.field_secret_count += n
     return result
 
 
@@ -110,6 +123,7 @@ def redact_file(path, ext):
     engine = Anonymizer(policy_for("faceless"))
     deadline = time.monotonic() + 1800
     parts = []
+    known_secrets = set()
     for section in sections(text, engine):
         if time.monotonic() >= deadline:
             raise PrivacyError("verification_timeout", "Обработка документа превысила полчаса. Разделите материал.")
@@ -117,6 +131,18 @@ def redact_file(path, ext):
         if parts and independent_check(parts[-1][-512:] + result.text[:512], engine.policy):
             raise PrivacyError("verification_failed", "Проверка на границе фрагментов обнаружила остаточные данные.")
         counts.update(result.stats())
+        known_secrets.update(r.original for r in result.replacements if r.category == "secret"
+                             and len(r.original.strip()) >= 4 and MASK not in r.original)
         parts.append(result.text)
         notes.extend(n for n in result.warnings if n not in notes)
-    return "".join(parts), dict(counts), notes
+    combined, repeated = mask_known_values("".join(parts), known_secrets)
+    if repeated:
+        counts["secret"] += repeated
+        previous = ""
+        for part in sections(combined, engine):
+            if independent_check(part, engine.policy) or (
+                previous and independent_check(previous + part[:512], engine.policy)
+            ):
+                raise PrivacyError("verification_failed", "Проверка полного документа обнаружила остаточные данные.")
+            previous = part[-512:]
+    return combined, dict(counts), notes

@@ -52,3 +52,12 @@ def test_rollback_from_http_to_tls_only_release_keeps_running_instance(monkeypat
     with pytest.raises(ValueError, match="--access https"):
         manage.change_version("v0.1.3", rollback=True)
     compose.assert_not_called()
+
+
+def test_startup_reports_changed_model_download_progress(monkeypatch, capsys):
+    event = Mock()
+    event.wait.side_effect = [False, False, False, True]
+    readings = [(2, "Старая запись"), (9, "Загружается GigaAM · 16 МиБ"), (12, "Загружается GigaAM · 16 МиБ")]
+    monkeypatch.setattr(manage, "compose", Mock(side_effect=[json.dumps(dict(time=t,label=label)) for t,label in readings]))
+    manage.report_model_preparation(event, started=5)
+    assert capsys.readouterr().out.splitlines() == ["Загружается GigaAM · 16 МиБ"]

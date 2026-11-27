@@ -17,7 +17,8 @@ def test_directory_user_access_and_revocation(tmp_path, monkeypatch):
     cfg = dict(kind="ad", host="dc.example.test", port=636, protocol="ldaps", ca="", timeout=3,
                bind_dn="CN=svc,DC=example,DC=test", base_dn="DC=example,DC=test", login_attr="",
                name_attr="", domain="EXAMPLE", suffix="example.test", admin_groups=[], user_groups=[])
-    person = SimpleNamespace(external_id="stable-id", login="reader", display_name="Анна Петрова", groups=[])
+    person = SimpleNamespace(external_id="stable-id", login="reader", display_name="Анна Петрова", groups=["CN=Managers,DC=example,DC=test"])
+    cfg["admin_groups"] = list(person.groups)
     monkeypatch.setattr(directory, "authenticate", lambda *args: person)
     monkeypatch.setattr(directory, "diagnose", lambda *args: [{"ok": True, "step": "bind", "detail": "OK"}])
     monkeypatch.setattr(directory, "lookup", lambda *args: person)
@@ -33,7 +34,7 @@ def test_directory_user_access_and_revocation(tmp_path, monkeypatch):
 
     one, two = app.test_client(), app.test_client()
     assert signin(one).status_code == signin(two).status_code == 302
-    assert one.get("/admin/users/").status_code == 403
+    assert one.get("/admin/users/").status_code == 200
     with app.app_context():
         reader = get_db().execute("SELECT id FROM users WHERE username=?", (person.login,)).fetchone()[0]
         local = get_db().execute("SELECT id FROM users WHERE identity='local:admin'").fetchone()[0]
@@ -42,7 +43,7 @@ def test_directory_user_access_and_revocation(tmp_path, monkeypatch):
     assert person.display_name in filtered.get_data(as_text=True)
     assert "Учебный каталог" in filtered.get_data(as_text=True)
     assert "Локальная учётная запись" not in filtered.get_data(as_text=True)
-    assert one.post(path, data={"action": "disable", "csrf_token": token(one.get("/"))}).status_code == 403
+    assert one.post(path, data={"action": "disable", "csrf_token": token(one.get("/"))}).status_code == 400
     assert admin.post(path, data={"action": "disable"}).status_code == 400
 
     def access(action):
@@ -50,7 +51,7 @@ def test_directory_user_access_and_revocation(tmp_path, monkeypatch):
 
     assert access("disable").status_code == 302
     assert access("disable").status_code == 302
-    assert one.get("/").location.endswith("/login") and two.get("/").location.endswith("/login")
+    assert one.get("/admin/").location.endswith("/login") and two.get("/admin/").location.endswith("/login")
     assert signin(one).status_code == 401
     assert person.display_name not in admin.get("/admin/users/?active=1").get_data(as_text=True)
     assert person.display_name in admin.get("/admin/users/").get_data(as_text=True)
@@ -66,7 +67,7 @@ def test_directory_user_access_and_revocation(tmp_path, monkeypatch):
                                         "csrf_token": token(admin.get(profile))})
     assert "Учётная запись отключена в IS Manager" in checked.get_data(as_text=True)
     assert access("enable").status_code == 302
-    assert one.get("/").location.endswith("/login")
+    assert one.get("/admin/").location.endswith("/login")
     assert signin(one).status_code == 302
     assert admin.post(f"/admin/users/{local}/access", data={"action": "disable",
                       "csrf_token": token(admin.get("/admin/users/"))}).status_code == 400
@@ -153,3 +154,25 @@ def test_concurrent_requests_respect_shared_ip_limit(tmp_path):
     with app.app_context():
         count = get_db().execute("SELECT count FROM attempts WHERE key=?", (auth.digest("ip:192.0.2.10"),)).fetchone()
         assert count[0] == 3
+
+
+def test_directory_search_keeps_groups_when_an_entry_hides_its_id(monkeypatch):
+    cfg = directory.DirectoryConfig(id="picker", kind="openldap", hosts=("ldap.test",), port=636,
+                                    encryption="ldaps", ca_cert="", bind_dn="cn=reader", bind_password="fixture",
+                                    base_dn="dc=test", id_attr="entryUUID", login_attr="uid",
+                                    user_filter="(objectClass=inetOrgPerson)")
+
+    class LimitedConnection:
+        result = {"result": 0}
+        server_pool = None
+
+        def search(self, base, predicate, **kwargs):
+            group = "(objectClass=group)" in predicate
+            self.response = [{"type": "searchResEntry", "dn": "cn=one,dc=test", "attributes": {"cn": ["Group" if group else "Person"]}}]
+
+        def unbind(self):
+            pass
+
+    monkeypatch.setattr(directory, "_service", lambda _cfg: LimitedConnection())
+    items = directory.search_principals(cfg, "")
+    assert [(item["kind"], item["label"]) for item in items] == [("group", "Group")]

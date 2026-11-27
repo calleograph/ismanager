@@ -8,8 +8,9 @@ import secrets
 import socket
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
-from app.network import public_authority
+from app.network import public_authority, public_url
 from scripts import manage
 
 
@@ -23,7 +24,7 @@ def lan_address():
     return str(address)
 
 
-def network_settings(old, mode=None, bind=None, port=None, host=None, trusted_proxy=None):
+def network_settings(old, mode=None, bind=None, port=None, host=None, trusted_proxy=None, external=None):
     previous = old.get("ACCESS_MODE", "https")
     mode = mode or previous
     same = mode == previous
@@ -42,6 +43,16 @@ def network_settings(old, mode=None, bind=None, port=None, host=None, trusted_pr
     if not 1 <= port <= 65535:
         raise ValueError("Порт должен быть в диапазоне 1–65535.")
 
+    if external is None and same and host is None and (mode == "proxy" or
+            (bind == old.get("BIND_ADDRESS") and str(port) == old.get("PORT"))):
+        external = old.get("PUBLIC_URL")
+    if external:
+        external = public_url(mode, host, port, explicit=external)
+        origin = urlsplit(external)
+        default = 80 if origin.scheme == "http" else 443
+        if host and public_authority(host, default) != origin.netloc:
+            raise ValueError("--host и --public-url указывают разные адреса. Укажите внешний адрес один раз.")
+        host = origin.netloc if mode == "proxy" else origin.hostname
     if host is None and same and (mode == "proxy" or bind == old.get("BIND_ADDRESS")):
         host = old.get("PUBLIC_HOST")
     if not host:
@@ -50,7 +61,7 @@ def network_settings(old, mode=None, bind=None, port=None, host=None, trusted_pr
         host = "localhost" if addr.is_loopback else str(addr)
     if mode != "proxy" and ":" in host:
         raise ValueError("Для прямого доступа порт задаётся через --port.")
-    host = public_authority(host)
+    host = public_authority(host, 80 if external and external.startswith("http://") else 443)
 
     if mode == "proxy":
         peers = trusted_proxy if trusted_proxy is not None else (old.get("TRUSTED_PROXY_IPS") if same else None)
@@ -72,7 +83,8 @@ def network_settings(old, mode=None, bind=None, port=None, host=None, trusted_pr
         if trusted_proxy is not None:
             raise ValueError("--trusted-proxy применяется с --access proxy.")
         peers = ""
-    return dict(ACCESS_MODE=mode, BIND_ADDRESS=str(addr), PORT=str(port), PUBLIC_HOST=host, TRUSTED_PROXY_IPS=peers)
+    return dict(ACCESS_MODE=mode, BIND_ADDRESS=str(addr), PORT=str(port), PUBLIC_HOST=host,
+                TRUSTED_PROXY_IPS=peers, PUBLIC_URL=external or "")
 
 
 def check_port(cfg, old):
@@ -92,13 +104,15 @@ def main():
     parser.add_argument("--port", type=int)
     parser.add_argument("--host")
     parser.add_argument("--trusted-proxy")
+    parser.add_argument("--public-url")
     args = parser.parse_args()
     os.umask(0o077)
     manage.STATE.mkdir(exist_ok=True)
     with (manage.STATE / "operation.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         old = {} if args.initialize else manage.settings()
-        config = {**old, **network_settings(old, args.mode, args.bind, args.port, args.host, args.trusted_proxy)}
+        config = {**old, **network_settings(old, args.mode, args.bind, args.port, args.host,
+                                            args.trusted_proxy, args.public_url)}
         check_port(config, old)
         if args.initialize:
             if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", args.initialize):

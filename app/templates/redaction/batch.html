@@ -16,6 +16,7 @@
 </section>
 <section class="panel" id="batch-results" data-pending="{{ counts.get('queued',0)+counts.get('running',0) }}">
   <h2>Результаты</h2>
+  {% if legacy %}<p class="notice">В этом пакете есть результаты по прежним правилам, в которых могли сохраниться секреты. Для повторной проверки всех документов <a href="{{ url_for('redaction.index') }}">создайте новый пакет</a> и загрузите оригиналы.</p>{% endif %}
   <p>Имена выбранных файлов видны только в этой вкладке до выхода из учётной записи.</p>
   <p>Всего {{ total }} · В очереди {{ counts.get('queued',0) }} · Обрабатывается {{ counts.get('running',0) }} · Готово {{ counts.get('done',0) }} · Ошибок {{ counts.get('failed',0) }}</p>
   {% if counts.get('done') %}<p><a class="button" href="{{ url_for('redaction.batch_archive',batch_id=batch.id) }}">Скачать готовые TXT в ZIP</a></p>{% endif %}

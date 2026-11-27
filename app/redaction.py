@@ -32,6 +32,7 @@ def init_db(db):
             record_id INTEGER NOT NULL REFERENCES redactions(id) ON DELETE CASCADE, PRIMARY KEY(user_id,nonce)
         );
     """)
+    redaction_batch.mark_legacy_results(db, "redactions")
 
 
 def page(*, original="", record=None, error="", status=200, preview=False):

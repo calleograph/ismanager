@@ -43,6 +43,16 @@ def migrate_rules(db):
                 db.execute("ALTER TABLE watch_files ADD COLUMN processing_note TEXT NOT NULL DEFAULT ''")
             if "recoveries" not in file_columns:
                 db.execute("ALTER TABLE watch_files ADD COLUMN recoveries INTEGER NOT NULL DEFAULT 0")
+            if "redaction_revision" not in file_columns:
+                db.execute("ALTER TABLE watch_files ADD COLUMN redaction_revision INTEGER NOT NULL DEFAULT 0")
+                # Existing TXT files may still contain fields missed by the 0.4 rules.
+                db.execute("""UPDATE watch_files SET state='settling',seen_since=unixepoch(),result_stamp='',
+                              retry_at=0,recoveries=0,publish_intent=0,error=''
+                              WHERE rule_id IN (SELECT id FROM watch_rules WHERE kind='redaction')""")
+            transcript_columns = {row[1] for row in db.execute("PRAGMA table_info(transcripts)")}
+            for name in ("accepted_at", "started_at", "recognizing_at", "finished_at"):
+                if name not in transcript_columns:
+                    db.execute(f"ALTER TABLE transcripts ADD COLUMN {name} INTEGER")
     finally:
         db.execute("PRAGMA foreign_keys=" + ("ON" if foreign_keys else "OFF"))
 
@@ -58,6 +68,7 @@ def init_db(db):
             progress INTEGER NOT NULL DEFAULT 0,
             recoveries INTEGER NOT NULL DEFAULT 0,
             seconds INTEGER NOT NULL DEFAULT 0,
+            accepted_at INTEGER, started_at INTEGER, recognizing_at INTEGER, finished_at INTEGER,
             original TEXT NOT NULL DEFAULT '',
             body TEXT NOT NULL DEFAULT '',
             revision INTEGER NOT NULL DEFAULT 0,
@@ -105,7 +116,8 @@ def model_status(data_dir):
 
 def claim(db):
     return db.execute("""
-        UPDATE transcripts SET status='running', progress=0, seconds=0, error=''
+        UPDATE transcripts SET status='running', progress=0, seconds=0, error='',
+            started_at=unixepoch(),recognizing_at=NULL,finished_at=NULL
         WHERE id=(SELECT id FROM transcripts WHERE status='queued' ORDER BY rowid LIMIT 1)
         RETURNING id
     """).fetchone()

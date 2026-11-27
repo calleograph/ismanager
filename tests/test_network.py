@@ -60,7 +60,7 @@ def test_http_sessions_login_csrf_passwords_and_https_transition(tmp_path):
     other = create_app(cfg | {"ACCESS_MODE": "https"}).test_client()
     copied = c.get_cookie("ismanager_http_session", domain="lan.example")
     other.set_cookie("ismanager_session", copied.value, domain="lan.example")
-    assert other.get("/", base_url="https://lan.example").location == "/login"
+    assert other.get("/admin/", base_url="https://lan.example").location == "/login"
 
 
 def test_proxy_peer_scheme_host_and_limiter_address(tmp_path):
@@ -172,3 +172,20 @@ def test_gunicorn_transport_and_spoofed_headers(mode, tmp_path, monkeypatch):
         finally:
             process.terminate()
             process.wait(timeout=10)
+
+
+def test_http_nginx_uses_public_host_port_scheme_and_separate_cookie(tmp_path):
+    origin = "http://portal.example:8106/"
+    app = create_app(client_config(tmp_path, ACCESS_MODE="proxy", TRUSTED_PROXY_IPS=PROXY,
+                                   PUBLIC_URL=origin, PUBLIC_PORT="18086"))
+    app.after_request(inspect_request)
+    client = app.test_client()
+    headers = {"Host": "portal.example:8106", "X-Forwarded-Proto": "http", "X-Forwarded-For": CLIENT}
+    sender = {"REMOTE_ADDR": PROXY}
+    page = client.get("/login", headers=headers, environ_overrides=sender)
+    assert page.headers["X-Test-Scheme"] == "http"
+    assert page.headers["X-Test-Host"] == "portal.example:8106"
+    assert page.headers["X-Test-Peer"] == CLIENT
+    assert page.headers["Set-Cookie"].startswith("ismanager_http_session=") and "Secure" not in page.headers["Set-Cookie"]
+    assert client.get("/login", headers=headers | {"X-Forwarded-Proto": "https"}, environ_overrides=sender).status_code == 400
+    assert client.get("/login", headers=headers | {"Host": "portal.example:18086"}, environ_overrides=sender).status_code == 400

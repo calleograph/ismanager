@@ -1,0 +1,14 @@
+.asr-console {
+  margin: 1rem 0;
+  padding: 1rem;
+  border-radius: .75rem;
+  background: #162334;
+  color: #e7eff8;
+  font: .9rem/1.55 ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.asr-console pre { margin: 0; padding: 0; background: transparent; color: inherit; font: inherit; white-space: pre-wrap; }
+.asr-console p { margin: .4rem 0; }
+.asr-console p:empty, .asr-console pre:empty { display: none; }
+.asr-console progress { display: block; width: 100%; margin: .65rem 0; }
+.asr-console a { color: #b2e5ff; }

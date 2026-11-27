@@ -12,7 +12,7 @@ from __future__ import annotations
 from .engine import Policy
 from . import faceless
 from .patterns import find_structured
-from .secrets import find_secrets
+from .secrets import credential_cells, explicit_fields, find_secrets, shadow
 
 STRICT_CATEGORIES = ("email", "phone", "ip", "id_number", "bank")
 
@@ -20,6 +20,9 @@ STRICT_CATEGORIES = ("email", "phone", "ip", "id_number", "bank")
 def independent_check(text: str, policy: Policy) -> list[str]:
     """Список категорий, оставшихся в тексте (пусто — чисто). Секреты проверяются всегда."""
     leaks = ["secret" for _ in find_secrets(text)]
+    normalized = shadow(text)
+    if next(explicit_fields(normalized), None) or next(credential_cells(normalized), None):
+        leaks.append("secret")
     if policy.use_faceless:
         leaks += [f.category for f in faceless.find(text, secrets_only=True)]
     want = {c for c in STRICT_CATEGORIES if policy.action(c) != "keep"}

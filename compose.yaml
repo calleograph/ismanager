@@ -8,6 +8,7 @@ services:
       DATA_DIR: /data
       ACCESS_MODE: ${ACCESS_MODE:-https}
       PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+      PUBLIC_URL: ${PUBLIC_URL:-}
       PUBLIC_PORT: ${PORT:-18443}
       TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
     volumes:

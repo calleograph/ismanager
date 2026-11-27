@@ -4,6 +4,7 @@
 {% set descriptions = ['Загрузите запись, отредактируйте стенограмму и сохраните текст.', 'Найдите чувствительные данные в тексте или документе и замените их обозначениями.', 'Создайте стойкий пароль или запоминаемую фразу с нужными параметрами.', 'Заполните анкету системы и подготовьте комплект документов.'] %}
 {% for key,symbol,label,kind in sections %}<a class="module-card {{ key }}" href="{{ url_for(key+'.index') }}"><div class="cardtop"><div class="module-icon">{{ icon(symbol) }}</div><span class="small-arrow">{{ icon('chevron-right') }}</span></div>
 <h2>{{ 'Генератор паролей' if key=='passwords' else label }}</h2><p>{{ descriptions[loop.index0] }}</p></a>{% endfor %}</div>
+{% if not g.user.admin %}<p class="muted">Записи, документы и черновики доступны в этом браузере. Cookie рабочего пространства действует семь дней с последнего посещения.</p>{% endif %}
 {% if recent %}<section class="panel recent"><h2>Последние материалы</h2>
 {% for row in recent %}<a class="history-link" href="{{ url_for('transcription.detail',job_id=row.id) if row.kind=='transcript' else url_for('redaction.show',record_id=row.id) if row.kind=='redaction' else url_for('threats.edit',model_id=row.id,step=1) }}"><span>{{ row.title }}</span><time>{{ row.stamp }} UTC</time></a>{% endfor %}</section>{% endif %}
 {% endblock %}

@@ -14,7 +14,7 @@ def app(tmp_path):
 
 
 def token(resp):
-    return re.search(rb'name="csrf_token" value="([^"]+)"', resp.data).group(1).decode()
+    return re.search(rb'name="csrf-token" content="([^"]+)"', resp.data).group(1).decode()
 
 
 def first_login(app):

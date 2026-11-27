@@ -4,6 +4,9 @@ import pytest
 
 from app.privacy import names, processing
 from app.privacy.secrets import mask_explicit_fields
+from app.privacy.known_values import MASK
+from app.privacy.patterns import find_structured
+from app.privacy.verify import independent_check
 
 
 def test_ticket_fields_repeats_and_structured_values():
@@ -27,6 +30,42 @@ def test_sections_preserve_every_character_and_reject_unbroken_overlimit():
         list(processing.sections('x' * 60001))
 
 
+def test_wrapped_credentials_in_pdf_columns_and_free_text():
+    source = ("        key=demo_api_b51b46e68359\n"
+              "        f49a931c         Summary\n"
+              "TKT-8   zz_demo_5c2d894b237a88    Signing secret\n"
+              "        d602b44          Notes\n"
+              "Other report: zz_demo_5c2d894b237a88d602b44.\n")
+    result, count = mask_explicit_fields(source)
+    assert count == 5 and "Summary" in result and "Notes" in result
+    for fragment in ("b51b46e6", "f49a931c", "5c2d894", "d602b44"):
+        assert fragment not in result
+    policy = processing.policy_for("faceless")
+    assert "secret" in independent_check(source, policy)
+    assert independent_check(result, policy) == []
+
+
+@pytest.mark.parametrize("suffix", ["uuudddd", "3987284"])
+def test_wrapped_letter_or_digit_only_key_fragment(suffix):
+    text = f"  key=monochromelabel\n  {suffix}     Summary\n  Report complete."
+    result, _ = mask_explicit_fields(text)
+    assert suffix not in result and "monochromelabel" not in result
+    assert "Summary" in result and "Report complete." in result
+
+
+@pytest.mark.parametrize("prefix", ["Wi-Fi password: ", "Authorization: Bearer ", "https://portal.invalid/?token="])
+def test_completed_marker_does_not_block_verified_release(prefix):
+    policy = processing.policy_for("faceless")
+    assert independent_check(prefix + MASK, policy) == []
+    assert "secret" in independent_check(prefix + "[SYNTHETIC_private_C42]", policy)
+
+
+def test_internal_ticket_ids_without_number_sign():
+    text = "Номер заявки: SKY-2099-0234. Инцидент ORB-ASR-2098-0056."
+    observed = {text[f.start:f.end] for f in find_structured(text) if f.category == "doc_number"}
+    assert observed == {"SKY-2099-0234", "ORB-ASR-2098-0056"}
+
+
 @pytest.mark.skipif(not (names.NLP_DIR / names.NER_FILE).is_file(), reason="requires local NLP models")
 def test_large_document_credentials_across_boundaries(tmp_path):
     file = tmp_path / 'helpdesk.txt'
@@ -41,3 +80,14 @@ def test_large_document_credentials_across_boundaries(tmp_path):
     assert not any(x in result for x in ('blue otter', 'UNPUBLISHED', 'PRIVATE KEY'))
     with patch.object(processing, 'independent_check', return_value=['secret']), pytest.raises(processing.PrivacyError):
         processing.redact_file(file, 'txt')
+
+
+@pytest.mark.skipif(not (names.NLP_DIR / names.NER_FILE).is_file(), reason="requires local NLP models")
+def test_credential_detected_in_later_window_masks_earlier_unlabelled_copy(tmp_path):
+    path = tmp_path / "log.txt"
+    token = "novemberSyntheticIllustration"
+    path.write_text("First occurrence " + token + "\n" + "Report processed.\n" * 850
+                    + "Authorization: Bearer " + token + "\nFinal line.")
+    result, _, _ = processing.redact_file(path, "txt")
+    assert token not in result
+    assert result.startswith("First occurrence ") and result.endswith("Final line.")

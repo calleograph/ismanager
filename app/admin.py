@@ -5,13 +5,14 @@ import socket
 import sqlite3
 import ssl
 from pathlib import Path
+from uuid import UUID
 
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding
 from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, url_for
 from ldap3.utils.dn import parse_dn
 
-from . import directory, journal, watch_admin
+from . import directory, journal, telemetry, watch_admin
 from .asr_store import model_status
 from .auth import digest, protected, reveal
 from .db import audit, auth_settings, get_db
@@ -36,11 +37,11 @@ def profile_config(row):
     )
 
 
-def roles(config, groups):
-    is_admin = (config.get("use_for_admins", True) and bool(config["admin_groups"])
-                and directory.group_allowed(groups, config["admin_groups"]))
-    as_user = config.get("use_for_users", True) and directory.group_allowed(groups, config["user_groups"])
-    return is_admin or as_user, is_admin
+def directory_admin(config, person):
+    groups = config.get("admin_groups", [])
+    return config.get("use_for_admins", True) and (
+        person.external_id in config.get("admin_users", {}) or
+        bool(groups) and directory.group_allowed(person.groups, groups))
 
 
 def directory_login(login, password):
@@ -59,14 +60,19 @@ def directory_login(login, password):
             if exc.code in {"not_found", "unavailable", "tls_error", "config_error"}:
                 continue
             return None
-        allowed, admin = roles(cfg, user.groups)
-        if not allowed:
-            return None
         key = f"ldap:{row['id']}:{user.external_id}"
         with db:
+            db.execute("BEGIN IMMEDIATE")
+            if not db.execute("SELECT 1 FROM directories WHERE id=? AND enabled=1 AND config=? AND password=?",
+                              (row["id"], row["config"], row["password"])).fetchone():
+                return None
+            if not directory_admin(cfg, user):
+                db.execute("UPDATE users SET admin=0 WHERE identity=?", (key,))
+                db.execute("DELETE FROM sessions WHERE user_id=(SELECT id FROM users WHERE identity=?)", (key,))
+                return None
             db.execute("""INSERT INTO users(identity,username,display_name,admin) VALUES (?,?,?,?)
                 ON CONFLICT(identity) DO UPDATE SET username=excluded.username,
-                display_name=excluded.display_name,admin=excluded.admin""", (key, user.login, user.display_name, admin))
+                display_name=excluded.display_name,admin=excluded.admin""", (key, user.login, user.display_name, 1))
         return db.execute("SELECT * FROM users WHERE identity=? AND disabled=0", (key,)).fetchone()
     return None
 
@@ -75,7 +81,7 @@ def directory_login(login, password):
 def index():
     db = get_db()
     profiles = db.execute("SELECT id,name,enabled FROM directories ORDER BY coalesce(json_extract(config,'$.priority'),100),id").fetchall()
-    counts = db.execute("""SELECT (SELECT COUNT(*) FROM users) AS users,
+    counts = db.execute("""SELECT (SELECT COUNT(*) FROM users WHERE identity NOT LIKE 'guest:%') AS users,
         (SELECT COUNT(*) FROM sessions WHERE expires>unixepoch()) AS sessions,
         (SELECT COUNT(*) FROM transcripts WHERE status='queued') +
         (SELECT COUNT(*) FROM watch_files f JOIN watch_rules r ON r.id=f.rule_id
@@ -88,8 +94,15 @@ def index():
         status = json.loads((Path(os.getenv("CONTROL_DIR", "/control")) / "status.json").read_text())
     except (OSError, ValueError):
         pass
+    data = current_app.config["DATA_DIR"]
     return render_template("admin.html", profiles=profiles, counts=counts, events=events, status=status,
-                           policy=auth_settings(), model_status=model_status(current_app.config["DATA_DIR"]))
+                           policy=auth_settings(), model_status=model_status(data), system=telemetry.system_info(data),
+                           operator=operator_state())
+
+
+@bp.get("/system-metrics")
+def system_metrics():
+    return telemetry.admin_counters(current_app.config["DATA_DIR"])
 
 
 @bp.post("/access")
@@ -119,7 +132,7 @@ def users():
                u.totp IS NOT NULL AS has_totp,d.name AS directory,d.enabled AS directory_enabled,
                (SELECT COUNT(*) FROM sessions WHERE user_id=u.id AND expires>unixepoch()) AS sessions
         FROM users u LEFT JOIN directories d ON u.identity LIKE 'ldap:' || d.id || ':%'
-        WHERE (? IS NULL OR u.id<?) AND instr(casefold(u.username || ' ' || u.display_name), ?) > 0
+        WHERE u.identity NOT LIKE 'guest:%' AND (? IS NULL OR u.id<?) AND instr(casefold(u.username || ' ' || u.display_name), ?) > 0
         AND (NOT ? OR EXISTS(SELECT 1 FROM sessions WHERE user_id=u.id AND expires>unixepoch()))
         ORDER BY u.id DESC LIMIT 51
     """, (before, before, query.casefold(), active)).fetchall()
@@ -137,7 +150,7 @@ def user_access(user_id):
     with get_db() as db:
         db.execute("BEGIN IMMEDIATE")
         user = db.execute("SELECT identity,disabled FROM users WHERE id=?", (user_id,)).fetchone()
-        if user is None:
+        if user is None or user["identity"].startswith("guest:"):
             abort(404)
         if user["identity"] == "local:admin" or user_id == g.user["id"]:
             abort(400, description="Для этой учётной записи изменение доступа недоступно.")
@@ -156,7 +169,7 @@ def revoke(user_id):
     if user_id >= 2**63:
         abort(404)
     with get_db() as db:
-        if not db.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone():
+        if not db.execute("SELECT 1 FROM users WHERE id=? AND identity NOT LIKE 'guest:%'", (user_id,)).fetchone():
             abort(404)
         db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
         audit("sessions.revoked", g.user["id"], target=user_id)
@@ -165,18 +178,35 @@ def revoke(user_id):
                             active="1" if request.args.get("active") == "1" else None))
 
 
+def operator_request(operation):
+    with socket.socket(socket.AF_UNIX) as sock:
+        sock.settimeout(1)
+        sock.connect(os.getenv("CONTROL_DIR", "/control") + "/operator.sock")
+        sock.sendall((digest(current_app.secret_key + ":operator") + " " + operation + "\n").encode())
+        return sock.makefile("rb").readline(32).strip()
+
+
+def operator_state():
+    if (Path(os.getenv("CONTROL_DIR", "/control")) / "operator-disabled").is_file():
+        return "disabled"
+    try:
+        reply = operator_request("ping")
+        # Helpers predating the ping command reply "no" but still accept signed operations.
+        return {b"ready": "ready", b"no": "legacy", b"busy": "busy", b"disabled": "disabled"}.get(reply, "unavailable")
+    except OSError:
+        return "unavailable"
+
+
 @bp.post("/maintenance")
 def maintenance():
     op = request.form.get("operation", "")
     if op not in {"check", "update", "rollback", "backup"}:
         abort(400)
+    if (Path(os.getenv("CONTROL_DIR", "/control")) / "operator-disabled").is_file():
+        flash("Веб-управление отключено при установке. Команды для сервера приведены ниже.")
+        return redirect(url_for("admin.index"))
     try:
-        with socket.socket(socket.AF_UNIX) as sock:
-            sock.settimeout(4)
-            sock.connect(os.getenv("CONTROL_DIR", "/control") + "/operator.sock")
-            sock.sendall((digest(current_app.secret_key + ":operator") + " " + op + "\n").encode())
-            reply = sock.makefile("rb").readline(32)
-        if reply == b"ok\n":
+        if operator_request(op) == b"ok":
             with get_db():
                 audit("maintenance." + op, g.user["id"])
             flash("Задача принята. Обновите страницу для просмотра результата.")
@@ -227,13 +257,21 @@ def profile(profile_id):
                 data = {key: request.form.get(key, "").strip() for key in
                         ("host", "protocol", "kind", "domain", "suffix", "ca", "base_dn", "bind_dn", "login_attr", "name_attr")}
                 data.update(port=int(request.form.get("port", 636)), timeout=int(request.form.get("timeout", 5)))
-                for key in ("user_groups", "admin_groups"):
-                    data[key] = [line.strip() for line in request.form.get(key, "").splitlines() if line.strip()]
+                previous = json.loads(row["config"]) if row else {}
+                data["user_groups"] = previous.get("user_groups", [])
+                data["use_for_users"] = previous.get("use_for_users", bool(row))
+                data["admin_groups"] = list(dict.fromkeys(line.strip() for line in request.form.get("admin_groups", "").splitlines() if line.strip()))
+                selected = request.form.getlist("admin_user")
+                if len(selected) + len(data["admin_groups"]) > 256:
+                    raise ValueError("В одном подключении можно выбрать до 256 назначений.")
+                data["admin_users"] = {}
+                for value in selected:
+                    uid, _, label = value.partition("|")
+                    data["admin_users"][str(UUID(uid))] = label[:256] or uid
                 data["priority"] = int(request.form.get("priority", 100))
                 if not 1 <= data["priority"] <= 9999:
                     raise ValueError("Порядок проверки должен быть от 1 до 9999.")
-                data.update({key: key in request.form or "role_flags" not in request.form
-                             for key in ("use_for_users", "use_for_admins")})
+                data["use_for_admins"] = "use_for_admins" in request.form or "role_flags" not in request.form
                 certificate = request.files.get("certificate")
                 if certificate and certificate.filename:
                     raw = certificate.stream.read(65537)
@@ -255,10 +293,10 @@ def profile(profile_id):
                         db.execute("UPDATE directories SET name=?,config=?,password=?,enabled=? WHERE id=?", (*values, profile_id))
                         revoke_profile(db, profile_id)
                     else:
-                        db.execute("INSERT INTO directories(name,config,password,enabled) VALUES (?,?,?,?)", values)
+                        profile_id = db.execute("INSERT INTO directories(name,config,password,enabled) VALUES (?,?,?,?)", values).lastrowid
                     audit("directory.saved", g.user["id"])
                 flash("Подключение сохранено.")
-                return redirect(url_for("admin.index"))
+                return redirect(url_for("admin.profile", profile_id=profile_id))
             if row is None:
                 abort(400)
             if action == "delete":
@@ -273,10 +311,10 @@ def profile(profile_id):
                 if user and all(step["ok"] for step in steps):
                     person = directory.lookup(profile_config(row), user, True)
                     if person:
-                        allowed, admin = roles(data, person.groups)
+                        allowed = directory_admin(data, person)
                         blocked = db.execute("SELECT 1 FROM users WHERE identity=? AND disabled=1",
                                              (f"ldap:{row['id']}:{person.external_id}",)).fetchone()
-                        detail = "Администратор" if admin else "Допуск разрешён" if allowed else "Доступ закрыт"
+                        detail = "Администратор" if allowed else "Администрирование не назначено"
                         if blocked or not row["enabled"]:
                             allowed = False
                             detail = "Учётная запись отключена в IS Manager" if blocked else "Подключение отключено"
@@ -288,6 +326,21 @@ def profile(profile_id):
     return render_template("directory.html", row=row, data=data, steps=steps, error=error)
 
 
+@bp.get("/directory/<int:profile_id>/principals")
+def principals(profile_id):
+    row = get_db().execute("SELECT * FROM directories WHERE id=?", (profile_id,)).fetchone()
+    if row is None:
+        abort(404)
+    try:
+        return {"items": directory.search_principals(profile_config(row), request.args.get("q", "").strip())}
+    except directory.LdapError as exc:
+        return {"error": "Каталог недоступен для поиска. Проверьте сохранённое подключение и права сервисной записи.",
+                "code": exc.code}, 502
+    except ValueError as exc:
+        return {"error": str(exc)}, 400
+
+
 def revoke_profile(db, profile_id):
+    db.execute("UPDATE users SET admin=0 WHERE identity LIKE ?", (f"ldap:{profile_id}:%",))
     db.execute("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE identity LIKE ?)",
                (f"ldap:{profile_id}:%",))

@@ -211,3 +211,23 @@ def test_completed_batch_deletion_and_active_transfer(setup,monkeypatch):
                    ("redaction_batches","redaction_batch_files","redaction_batch_receipts"))
     other,_ = create(alice)
     assert other!=where
+
+
+def test_upgrade_identifies_results_from_older_rules(setup, monkeypatch):
+    from app import redaction
+
+    app, user, other, root = setup
+    where, csrf = create(user)
+    assert upload(user, where, csrf, b"document").status_code == 200
+    monkeypatch.setattr(jobs, "redact_file", lambda path, ext: ("Проверено", {}, []))
+    with app.app_context():
+        db = get_db()
+        assert jobs.work(db, root)
+        with db:
+            db.execute("ALTER TABLE redaction_batch_files DROP COLUMN legacy_rules")
+            db.execute("ALTER TABLE redactions DROP COLUMN legacy_rules")
+        redaction.init_db(db)
+    assert "по прежним правилам" in user.get(where).get_data(as_text=True)
+    assert other.get(where).status_code == 404
+    fresh, _ = create(user)
+    assert "по прежним правилам" not in user.get(fresh).get_data(as_text=True)

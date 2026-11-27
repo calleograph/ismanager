@@ -474,6 +474,45 @@ def lookup(cfg: DirectoryConfig, login: str, check: bool) -> DirectoryUser | Non
         _close(svc)
 
 
+def search_principals(cfg: DirectoryConfig, query: str) -> list[dict]:
+    """Bound each list so users and groups both appear on focus in a large directory."""
+    if len(query) > 128 or any(ord(c) < 32 for c in query):
+        raise ValueError("Введите до 128 символов для поиска.")
+    term = escape_filter_chars(query)
+    conn = _service(cfg)
+    matches = []
+    try:
+        for kind, objects, attrs in (
+            ("group", _GROUP_CLASSES, ["cn"]),
+            ("user", cfg.user_filter, list(dict.fromkeys([cfg.login_attr, cfg.name_attr, "cn"]))),
+        ):
+            predicate = "(|" + "".join(f"({attr}=*{term}*)" for attr in attrs) + ")" if term else ""
+            columns = attrs if kind == "group" else [*attrs, cfg.id_attr]
+            conn.search(cfg.base_dn, f"(&{objects}{predicate})", search_scope=SUBTREE, attributes=columns,
+                        size_limit=12, time_limit=cfg.timeout)
+            if (conn.result or {}).get("result") not in (0, 4):
+                raise _search_failed(conn, "поиск пользователей и групп")
+            for entry in conn.response or []:
+                if entry.get("type") != "searchResEntry":
+                    continue
+                dn = str(entry["dn"])
+                label = _first(entry, cfg.name_attr) or _first(entry, "cn") or dn
+                login = _first(entry, cfg.login_attr) if kind == "user" else None
+                identifier = dn
+                if kind == "user":
+                    try:
+                        identifier = external_id(cfg, entry)
+                    except LdapError:
+                        # Limited ACLs can hide one entry's stable ID while groups remain assignable.
+                        continue
+                matches.append(dict(kind=kind, id=identifier, label=label, login=login, dn=dn))
+    except LDAPException as exc:
+        raise _transport_error(exc) from None
+    finally:
+        _close(conn)
+    return matches
+
+
 def diagnose(cfg: DirectoryConfig, login: str | None, password: str | None) -> list[dict]:
     steps: list[dict] = []
 

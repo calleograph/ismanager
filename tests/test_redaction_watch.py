@@ -82,6 +82,31 @@ def test_redaction_validates_foreign_txt_and_finds_opaque_name(queue):
         assert restored.read_text() == "проверено" and redact.call_count == 1
 
 
+def test_upgrade_rechecks_existing_folders_without_reusing_legacy_text(queue):
+    import time
+
+    db, source = queue
+    name = "пример.txt"
+    (source / name).write_text("контрольный документ")
+    discover(db, source)
+    with patch.object(processing, "redact_file", return_value=("прежний результат", {}, [])):
+        drain(db, source)
+    published = source / watch.REDACTION_FOLDER / item(db, name)["output_name"]
+    assert published.read_text() == "прежний результат"
+    with db:
+        db.execute("ALTER TABLE watch_files DROP COLUMN redaction_revision")
+    asr_store.init_db(db)
+    assert item(db, name)["state"] == "settling"
+    now = int(time.time()) + 30
+    discover(db, source, now=now)
+    with patch.object(processing, "redact_file", return_value=("проверено заново", {}, [])) as redact:
+        drain(db, source, now=now + 16)
+        assert redact.call_count == 1
+    assert published.read_text() == "проверено заново"
+    asr_store.init_db(db)
+    assert item(db, name)["state"] == "done"
+
+
 @pytest.mark.parametrize("foreign", ["совпадение", ""])
 def test_redaction_never_adopts_existing_txt_on_first_attempt(queue, foreign):
     db, source = queue

@@ -67,7 +67,7 @@ def make_password(form):
         RANDOM.shuffle(chars)
         return {"password": "".join(chars), "words": []}
     if mode == "custom":
-        words = form.get("phrase", "").split()
+        words = [word for word in re.split(r"[\s,;—–-]+", form.get("phrase", "")) if word]
         if not 3 <= len(words) <= 5 or any(len(word) > 64 for word in words):
             raise ValueError("Введите от трёх до пяти слов длиной до 64 букв каждое.")
         fragments = [translit(word) for word in words]
@@ -96,8 +96,16 @@ def make_password(form):
         raise ValueError("Выберите положение вставки.")
     salt = [secrets.choice("23456789")] + [secrets.choice(SALT) for _ in range(1 + secrets.randbelow(2))]
     RANDOM.shuffle(salt)
-    parts.insert(secrets.choice(positions[where]), "".join(salt))
-    return {"password": "".join(parts), "words": list(words)}
+    index = secrets.choice(positions[where])
+    insert = "".join(salt)
+    return {
+        "password": "".join([*parts[:index], insert, *parts[index:]]),
+        "words": list(words),
+        "breakdown": {
+            "wordsRu": list(words), "fragments": parts, "insert": insert,
+            "structure": "W" * index + "I" + "W" * (len(parts) - index),
+        },
+    }
 
 
 @bp.get("/")

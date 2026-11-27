@@ -1,0 +1,49 @@
+<section class="threat-card">
+  <h2>Быстрое заполнение из файла Excel</h2>
+  <p>Сведения об организации и системе можно перенести из таблицы. На следующих шагах вы сможете проверить банк угроз и меры защиты.</p>
+  <div class="threat-excel">
+    <a class="btn secondary" href="{{ url_for('.blank') }}">{{ icon('download') }} Скачать пример шаблона (Excel)</a>
+    <label class="btn secondary threat-upload">{{ icon('scroll-text') }} Загрузить заполненный файл
+      <input type="file" name="sheet" id="threat-sheet" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+    </label>
+    <noscript><button name="action" value="import">Применить файл</button></noscript>
+  </div>
+  <p>Откройте шаблон в Excel или LibreOffice Calc и заполните столбец B. Сохраните названия полей в столбце A. Для полей со списком выберите значение в ячейке.</p>
+</section>
+<fieldset class="threat-card"><legend>Тип объекта защиты</legend>
+  <p>Выберите объект, для которого готовится комплект документов.</p>
+  <label class="threat-option"><input type="radio" name="objectType" value="ispdn" {% if data.get('objectType') != 'infrastructure_object' %}checked{% endif %}><span><strong>Одиночная информационная система персональных данных (ИСПДн)</strong><small>Уровень защищённости рассчитывается по сведениям об одной системе.</small></span></label>
+  <label class="threat-option"><input type="radio" name="objectType" value="infrastructure_object" {% if data.get('objectType')=='infrastructure_object' %}checked{% endif %}><span><strong>Объект информатизации, в том числе облачная платформа</strong><small>Для инфраструктуры учитывается предельный уровень защищённости размещаемых систем.</small></span></label>
+  <p id="infra-note" hidden>Выбранные сетевые условия относятся к одиночной системе. Для объекта информатизации выберите условия размещения инфраструктуры.</p>
+</fieldset>
+{% set tips = {
+'erp_1c':'Кадровый учёт, расчёт зарплаты, бухгалтерия и другие учётные операции.',
+'crm':'Контакты клиентов, обращения, сделки и история взаимодействия.',
+'mis_medical':'Медицинские карты, обращения пациентов, результаты обследований и назначения.',
+'public_website_cms':'Публичный сайт, личные кабинеты, формы обратной связи и административная часть.',
+'custom_development':'Система собственной или заказной разработки. Укажите её назначение на следующем шаге.',
+'industrial_control':'Автоматизация производственных процессов и рабочие места операторов.',
+'ai_bigdata_analytics':'Обработка наборов данных, обучение или применение моделей и получение аналитических результатов.',
+'iot_embedded':'Датчики и другие устройства передают данные в систему сбора или управления.',
+'custom_mixed':'Опишите назначение и состав системы вручную на следующих шагах.',
+'isolated_no_internet':'Рабочие места и серверы размещены в изолированном сегменте без доступа в Интернет.',
+'corporate_internet':'Система работает в сети организации и использует подключение к Интернету.',
+'paid_hosting_vps':'Сайт или приложение размещены у внешнего хостинг-провайдера.',
+'cloud_saas_platform':'Облачная платформа или сервис провайдера обрабатывает данные организации.',
+'external_it_outsource':'Внешняя организация обслуживает систему или её инфраструктуру.',
+'mobile_remote_access':'Пользователи подключаются к системе вне сети организации.'
+} %}
+{% for key,title,guide,choices in [('systemType','Тип системы','Укажите назначение системы. Профиль задаёт начальные рекомендации по последствиям и нарушителям.',catalog.systems),('systemNetworkCondition','Сетевые условия работы системы','Укажите, где работает система и откуда пользователи могут к ней подключиться.',catalog.networks)] %}
+<section class="threat-card"><h2><label for="threat-{{ key }}">{{ title }}</label></h2><p id="help-{{ key }}">{{ guide }}</p>
+  <select name="{{ key }}" id="threat-{{ key }}" aria-describedby="help-{{ key }}"><option value="">Выберите…</option>
+    {% for value,item in choices.items() %}<option value="{{ value }}" {% if key=='systemNetworkCondition' and item.constraints.allowInfrastructureObject is sameas false %}data-single-system{% endif %} {% if data.get(key)==value %}selected{% endif %}>{{ item.title }}</option>{% endfor %}
+  </select>
+  {% for value in choices %}<p data-profile-tip="{{ key }}" data-option="{{ value }}" {% if value!=data.get(key) %}hidden{% endif %}>{{ tips[value] }}</p>{% endfor %}
+</section>
+{% endfor %}
+<fieldset class="threat-card"><legend>Значимость системы</legend>
+  <p>Отметьте применимые условия. Они уточняют возможных нарушителей и последствия.</p>
+  {% for code,item in catalog.significance.items() %}
+  <label class="threat-option"><input type="checkbox" name="flags" value="{{ code }}" {% if code in data.get('flags',[]) %}checked{% endif %}><span>{{ item.title }}<small>{{ {'government_restricted':'Уточняет состав нарушителей для систем с особыми условиями доступа.','kii_significant_object':'Учитывается при оценке возможностей внешних нарушителей.','high_staff_turnover':'Учитываются частая смена сотрудников и доступ бывшего персонала.'}[code] }}</small></span></label>
+  {% endfor %}
+</fieldset>

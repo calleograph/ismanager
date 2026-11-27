@@ -1,6 +1,7 @@
 """Faceless public detector catalogs; local context, validation and priority precede substitution."""
 import json
 import re
+from bisect import bisect_right
 from functools import lru_cache
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import regex
 
 from .patterns import inn_ok, snils_ok, luhn_ok
 from .secrets import Found, entropy
+from .known_values import MASK
 
 VALIDATORS = {
     "validateInn10Checksum": (inn_ok, ("инн", "inn")),
@@ -51,6 +53,7 @@ def context(text, start, end, span=0):
 
 
 def find(text, *, secrets_only=False):
+    mask_starts = [m.start() for m in re.finditer(re.escape(MASK), text)]
     for rule in rules():
         is_secret = "type" in rule
         rep = rule["replacement"]
@@ -65,7 +68,19 @@ def find(text, *, secrets_only=False):
                 group = 0
             start, end = match.span(group)
             value = match.group(group)
-            if not value.strip() or value.startswith("[") and value.endswith("]"):
+            if not value.strip():
+                continue
+            if cat == "secret" and mask_starts:
+                # Some catalog captures stop at the space *inside* our marker.
+                # Exempt only a span actually inside that exact marker.
+                index = bisect_right(mask_starts, start) - 1
+                if index >= 0 and end <= mask_starts[index] + len(MASK):
+                    after = mask_starts[index] + len(MASK)
+                    suffix = re.match(r"[\w+=/-]+", text[after:after + 512])
+                    if not suffix:
+                        continue
+                    start, end, value = after, after + suffix.end(), suffix[0]
+            elif cat != "secret" and value.startswith("[") and value.endswith("]"):
                 continue
             if is_secret and value.strip(" \"'").lower() in SCHEMA_LABELS:
                 continue

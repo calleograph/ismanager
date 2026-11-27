@@ -309,9 +309,12 @@ def _find(text: str) -> list[Found]:
 _FIELD = re.compile(
     r"""(?ix)(?<!\w)["']?(?: (?:new[_-]?|temp(?:orary)?[_-]?|db[_-]?)?pass(?:word|wd|phrase)
     | pwd | (?:client|app|shared)[_-]?secret | secret | (?:api|access|refresh|auth|session)[ _-]?(?:key|token)
-    | token | otp | totp | pin(?:[ -]?code)? | cvv | пароль(?:[ \t]+(?:к|от|для)[ \t]+[\w.-]+)?
+    | (?:license|licence|product|private|signing|encryption|activation|shared)[ _-]?key
+    | (?:secret|credential)[ _-]?value | api[ _-]?credential | credential
+    | key | token | otp | totp | pin(?:[ -]?code)? | cvv | пароль(?:[ \t]+(?:к|от|для)[ \t]+[\w.-]+)?
     | (?:одноразовый|временный|резервный)[ \t]+код | (?:пин[ -]?код|код[ \t]+(?:доступа|подтверждения))
-    | секрет(?:ный[ \t]+ключ)? | токен | ключ[ \t]+(?:доступа|api|апи) )["']?[ \t]*[:=][ \t]*"""
+    | секрет(?:ный[ \t]+ключ)? | токен | (?:лицензионный|приватный|закрытый|секретный)[ \t]+ключ
+    | ключ(?:[ \t]+(?:доступа|api|апи|шифрования|подписи|активации|лицензии))? )["']?[ \t]*[:=][ \t]*"""
 )
 _QUOTED = re.compile(r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|«[^»]*»''')
 _REDACTED = "[секрет удалён]"
@@ -354,22 +357,76 @@ def explicit_fields(text):
             number = re.match(r'\d+(?=\s*[,}])', text[start:end])
             if number:
                 end = start + number.end()
+        else:
+            # Retain distinct TSV columns, URL parameters and configuration fields.
+            delimiter = re.search(r"""\t|[;&,](?=\s*["']?[\w.-]{1,64}["']?\s*[:=])""", text[start:end])
+            if delimiter:
+                end = start + delimiter.start()
         pos = max(match.end(), end)
         if start < end and text[start:end].strip() not in ("", _REDACTED):
             yield Found(start, end, "secret", "ticket_field")
 
 
-def mask_explicit_fields(text):
+_ROW_SECRET = re.compile(r"(?i)(?:\b(?:secret|password|token|credential|ключ|секрет|пароль|токен)\b|\b(?:api[ _-]?key|key\s*[:=]))")
+_OPAQUE_CELL = re.compile(r"(?<!\S)(?:(?:[\w.-]{1,50})=)?(?P<v>[A-Za-z0-9][A-Za-z0-9_+./=-]{7,})(?=\s|$)")
+_CONTINUED = re.compile(r"[A-Za-z0-9_+/=-]{4,}(?=\s|$)")
+
+
+def credential_cells(text):
+    """Find credential values in text-column exports, including continuations in the same physical column."""
+    lines = text.splitlines(keepends=True)
+    offsets = []
+    offset = 0
+    for line in lines:
+        offsets.append(offset)
+        offset += len(line)
+    for i, line in enumerate(lines):
+        if not _ROW_SECRET.search(line):
+            continue
+        for cell in _OPAQUE_CELL.finditer(line):
+            value = cell["v"]
+            assigned = cell.start("v") != cell.start() and _FIELD.fullmatch(line[cell.start():cell.start("v")])
+            if not assigned and not (len(value) >= 16 and re.search(r"[a-z]", value, re.I) and re.search(r"\d", value)):
+                continue
+            spans = [(offsets[i] + cell.start("v"), offsets[i] + cell.end("v"))]
+            column = cell.start()
+            for j in range(i + 1, len(lines)):
+                following = lines[j]
+                if len(following) <= column or (column and not following[:column].isspace()) or _ROW_SECRET.search(following):
+                    break
+                tail = _CONTINUED.match(following, column)
+                if not tail:
+                    break
+                # A continuation can consist entirely of digits or letters. For
+                # such ambiguous words require a complete cell (possibly the sole column).
+                rest = following[tail.end():].rstrip("\r\n")
+                if tail[0].isalnum() and (tail[0].isalpha() or tail[0].isdigit()):
+                    if rest.strip() and not re.match(r"(?: {2,}|\t)", rest):
+                        break
+                spans.append((offsets[j] + tail.start(), offsets[j] + tail.end()))
+            yield spans
+
+
+def mask_explicit_fields(text, *, ignored_repeats=()):
     from .known_values import mask_known_values
 
     pieces, values, pos = [], set(), 0
     total = 0
-    for field in explicit_fields(shadow(text)):
-        pieces.extend((text[pos:field.start], _REDACTED))
-        value = text[field.start:field.end].strip()
-        if len(value) >= 4:
+    normalized = shadow(text)
+    spans = [(f.start, f.end) for f in explicit_fields(normalized)]
+    for group in credential_cells(normalized):
+        spans.extend(group)
+        if len(group) > 1:
+            values.add("".join(text[a:b] for a, b in group))
+    for start, end in sorted(set(spans)):
+        value = text[start:end].strip()
+        if len(value) >= 4 and value != _REDACTED and value not in ignored_repeats:
             values.add(value)
-        pos, total = field.end, total + 1
+        if start < pos:
+            pos = max(pos, end)
+        else:
+            pieces.extend((text[pos:start], _REDACTED))
+            pos, total = end, total + 1
     if not total:
         return text, 0
     pieces.append(text[pos:])

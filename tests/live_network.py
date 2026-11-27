@@ -95,7 +95,7 @@ def configure_nginx(tmp):
 
 
 def login(page, origin, password, replacement=None):
-    page.goto(origin)
+    page.goto(origin + "/login")
     page.get_by_label("Имя пользователя").fill("admin")
     page.get_by_label("Пароль", exact=True).fill(password)
     page.get_by_role("button", name="Войти").click()
@@ -109,7 +109,7 @@ def login(page, origin, password, replacement=None):
 
 def check_modules(page, origin, label):
     page.goto(origin + "/passwords/")
-    page.locator('[name="mode"]').select_option("random")
+    page.get_by_role("tab", name="Случайный").click()
     page.locator("#pass-generate").click()
     expect(page.locator("#pass-results li")).to_have_count(7)
     if not page.evaluate("window.isSecureContext"):
@@ -123,7 +123,7 @@ def check_modules(page, origin, label):
             form = fallback.locator("#pass-form")
             expect(form.locator('[name="processor"]')).to_have_value("server")
             expect(form.locator('option[value="browser"]')).to_be_disabled()
-            form.locator('[name="mode"]').select_option("random")
+            form.get_by_role("tab", name="Случайный").click()
             with fallback.expect_response(lambda r: r.request.method == "POST") as result:
                 form.locator("#pass-generate").click()
             assert result.value.ok
@@ -156,7 +156,7 @@ def check_modules(page, origin, label):
     assert "день" in transcript and "текст" in transcript
 
 
-def run(web_image, worker_image, nginx_image):
+def run(web_image, worker_image, nginx_image, model_volume=None):
     prefix = "ismanager-nettest-" + secrets.token_hex(6)
     web, worker, proxy = (prefix + "-" + part for part in ("web", "worker", "proxy"))
     data, models = prefix + "-data", prefix + "-models"
@@ -167,7 +167,10 @@ def run(web_image, worker_image, nginx_image):
             cleanup.callback(subprocess.run, ["docker", *args], capture_output=True)
         docker("network", "create", prefix)
         remove("network", "rm", prefix)
-        for volume in (data, models):
+        if model_volume:
+            docker("volume", "inspect", model_volume)
+            models = model_volume
+        for volume in ((data,) if model_volume else (data, models)):
             docker("volume", "create", volume)
             remove("volume", "rm", volume)
         tmp = Path(cleanup.enter_context(tempfile.TemporaryDirectory()))
@@ -209,7 +212,7 @@ def run(web_image, worker_image, nginx_image):
                 first_password = docker("exec", web, "flask", "--app", "app", "admin-password", "--if-missing")
                 assert first_password
                 docker("run", "-d", "--name", worker, "--network", prefix, "-v", f"{data}:/data",
-                       "-v", f"{models}:/models", worker_image)
+                       "-v", f"{models}:/models" + (":ro" if model_volume else ""), worker_image)
                 remove("rm", "-f", worker)
             if mode == "https":
                 assert certificate(port) == initial_cert
@@ -239,11 +242,11 @@ def run(web_image, worker_image, nginx_image):
                     legacy_cookie = f'{name}={cookie["value"]}'
                 if mode == "http":
                     insecure_cookie = cookie["value"]
-                    status, response = request(front_port, False, "/", {"Cookie": legacy_cookie})
+                    status, response = request(front_port, False, "/admin/", {"Cookie": legacy_cookie})
                     assert status == 302 and response["Location"] == "/login"
                 if mode in ("proxy", "https"):
-                    assert request(front_port, True, "/", {"Cookie": legacy_cookie})[0] == 200
-                    status, response = request(front_port, True, "/", {"Cookie": f"{name}={insecure_cookie}"})
+                    assert request(front_port, True, "/admin/", {"Cookie": legacy_cookie})[0] == 200
+                    status, response = request(front_port, True, "/admin/", {"Cookie": f"{name}={insecure_cookie}"})
                     assert status == 302 and response["Location"] == "/login"
                 altered = dict(FORWARDED)
                 altered["X-Forwarded-Proto"] = "http" if secure else "https"
@@ -268,5 +271,6 @@ if __name__ == "__main__":
     cli.add_argument("web_image")
     cli.add_argument("worker_image")
     cli.add_argument("--nginx-image", default="nginx:alpine")
+    cli.add_argument("--model-volume", help="Reuse prepared GigaAM weights read-only.")
     args = cli.parse_args()
-    run(args.web_image, args.worker_image, args.nginx_image)
+    run(args.web_image, args.worker_image, args.nginx_image, args.model_volume)

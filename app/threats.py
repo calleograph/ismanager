@@ -73,35 +73,42 @@ def change(row, columns, args):
 
 @bp.get("/")
 def index():
-    rows = get_db().execute(
-        "SELECT id,name,stage,updated,output IS NOT NULL AS ready FROM threat_models "
-        "WHERE owner=? ORDER BY updated DESC,id DESC",
-        (g.user["id"],),
-    )
-    return render_template("threats/index.html", rows=rows)
+    return wizard(None, dict(DEFAULT), 1)
+
+
+def import_sheet(data):
+    uploaded = request.files.get("sheet")
+    if not uploaded or not uploaded.filename:
+        raise ValueError("Выберите заполненную анкету в формате Excel (.xlsx).")
+    data.update(read_workbook(uploaded.stream.read(2_000_001)))
 
 
 @bp.post("/new")
 def new():
     data = dict(DEFAULT)
+    stage = 1
     try:
-        uploaded = request.files.get("sheet")
-        if uploaded and uploaded.filename:
-            data.update(read_workbook(uploaded.stream.read(2_000_001)))
-    except ValueError as error:
-        flash(str(error), "error")
-        return redirect(url_for(".index"))
+        if "objectType" in request.form:
+            update_step(1, data)
+        if request.form.get("action") == "import" or request.files.get("sheet"):
+            import_sheet(data)
+        elif request.form.get("action") == "next":
+            check_step(data, 1)
+            stage = 2
+    except ValueError as exc:
+        return wizard(None, data, 1, str(exc))
     db = get_db()
     cursor = db.execute(
-        "INSERT INTO threat_models(owner,name,data) VALUES(?,?,?)",
+        "INSERT INTO threat_models(owner,name,data,stage) VALUES(?,?,?,?)",
         (
             g.user["id"],
             data.get("infosystemShortName") or "Новая анкета",
             json.dumps(data, ensure_ascii=False),
+            stage,
         ),
     )
     db.commit()
-    return redirect(url_for(".edit", model_id=cursor.lastrowid, step=1))
+    return redirect(url_for(".edit", model_id=cursor.lastrowid, step=stage))
 
 
 @bp.get("/questionnaire.xlsx")
@@ -187,12 +194,21 @@ def edit(model_id, step):
         if step == 11:
             abort(405)
         try:
-            update_step(step, data)
+            importing = step == 1 and request.form.get("action") == "import"
+            if not importing or "objectType" in request.form:
+                update_step(step, data)
             next_step = step
-            if request.form.get("action") == "next":
+            if importing:
+                import_sheet(data)
+            elif "jump" in request.form:
+                next_step = request.form.get("jump", type=int)
+                if next_step is None or not 1 <= next_step <= row["stage"]:
+                    abort(400)
+            elif request.form.get("action") == "next":
                 check_step(data, step)
                 next_step = step + 1
-            columns = "name=?,data=?,stage=?,output=NULL"
+            columns = "name=?,data=?,stage=?"
+            changed_answers = json.loads(row["data"]) != data
             args = [
                 data.get("infosystemShortName") or "Новая анкета",
                 json.dumps(data, ensure_ascii=False),
@@ -203,22 +219,41 @@ def edit(model_id, step):
                 if upload and upload.filename:
                     args.append(read_image(upload))
                     columns += ",diagram=?"
-                elif request.form.get("remove_diagram"):
+                    changed_answers = True
+                elif row["has_image"] and request.form.get("remove_diagram"):
                     columns += ",diagram=NULL"
+                    changed_answers = True
+            if changed_answers:
+                columns += ",output=NULL"
             change(row, columns, args)
-            flash("Анкета сохранена.", "success")
+            if request.form.get("action") == "list":
+                return redirect(url_for(".index"))
+            if request.form.get("action") == "save":
+                flash("Анкета сохранена.", "success")
+            elif request.form.get("action") == "import":
+                flash("Поля из Excel загружены.", "success")
             return redirect(url_for(".edit", model_id=model_id, step=next_step))
         except ValueError as exc:
             error = str(exc)
+    return wizard(row, data, step, error)
+
+
+def wizard(row, data, step, error=None):
+    rows = () if row else get_db().execute(
+        "SELECT id,name,stage,updated,output IS NOT NULL AS ready FROM threat_models "
+        "WHERE owner=? ORDER BY updated DESC,id DESC",
+        (g.user["id"],),
+    )
     result = None
-    if step in (9, 11):
-        try:
-            result = assess(data)
-        except ValueError as exc:
+    try:
+        result = assess(data)
+    except ValueError as exc:
+        if step in (9, 11):
             error = error or str(exc)
     return render_template(
         "threats/edit.html",
         row=row,
+        rows=rows,
         data=data,
         fields=FIELDS,
         labels=LABELS,

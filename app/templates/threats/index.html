@@ -1,21 +1,4 @@
-{% extends "base.html" %}
-{% block title %}Модели угроз{% endblock %}
-{% block content %}
-<h1>Модели угроз</h1>
-<section class="panel">
-  <h2>Новая анкета</h2>
-  <p>Опишите систему, проверьте рекомендации по угрозам и сформируйте комплект документов Word для комиссии.</p>
-  <form method="post" action="{{ url_for('.new') }}" enctype="multipart/form-data">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <details><summary>Начать с Excel</summary><p><a href="{{ url_for('.blank') }}">Скачать шаблон анкеты (.xlsx)</a></p>
-      <label>Заполненная анкета <input type="file" name="sheet" accept=".xlsx"></label></details>
-    <button type="submit">Создать анкету</button>
-  </form>
+<section class="panel threat-recent"><h2>Мои анкеты</h2>
+  {% for row in rows %}<a class="history-link" href="{{ url_for('.edit',model_id=row.id,step=row.stage) }}"><strong>{{ row.name }}</strong><small>{{ "Документы сформированы" if row.ready else "Шаг " ~ row.stage ~ " из 11" }}</small></a>
+  {% else %}<p>Здесь появятся сохранённые анкеты.</p>{% endfor %}
 </section>
-<section class="panel"><h2>Мои анкеты</h2>
-{% for row in rows %}
-  <p><a href="{{ url_for('.edit',model_id=row.id,step=row.stage) }}">{{ row.name }}</a>
-  · {{ "Документы сформированы" if row.ready else "Шаг " ~ row.stage ~ " из 11" }} · {{ row.updated }} UTC</p>
-{% else %}<p>Сохранённые анкеты появятся здесь.</p>{% endfor %}
-</section>
-{% endblock %}

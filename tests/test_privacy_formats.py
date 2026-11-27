@@ -245,3 +245,44 @@ def test_mixed_page_uses_both_layers(tmp_path):
 def test_helpdesk_comment_does_not_turn_the_column_into_passwords():
     text, _ = extract("csv", "Номер;Описание\n1;Пользователь забыл пароль\n2;Печать восстановлена".encode())
     assert "Печать восстановлена" in text
+
+
+@pytest.mark.parametrize("ext", ["csv", "docx"])
+def test_property_catalog_protects_the_value_and_its_earlier_copies(ext):
+    rows = [
+        ("Category", "Raw value", "Expected action"),
+        ("Description", "See silver orchid and RG-5027-2984", "Keep"),
+        ("Password", "silver orchid", "Protect"),
+        ("Internal document", "RG-5027-2984", "Flag for review"),
+        ("Colour", "Azure", "Keep"),
+    ]
+    if ext == "docx":
+        w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        table = "".join("<w:tr>" + "".join(f"<w:tc><w:p><w:r><w:t>{v}</w:t></w:r></w:p></w:tc>"
+                                         for v in row) + "</w:tr>" for row in rows)
+        data = package({"word/document.xml": f'<w:document xmlns:w="{w}"><w:body><w:tbl>{table}</w:tbl></w:body></w:document>'})
+    else:
+        data = "\n".join(";".join(row) for row in rows).encode()
+    text, _ = extract(ext, data)
+    assert "See " in text and "Colour\tAzure\tKeep" in text and "Password" in text
+    assert text.count(MASK) == 4
+    assert "silver orchid" not in text and "RG-5027-2984" not in text
+
+
+def test_outlook_message_and_attachment_share_redaction_context(tmp_path):
+    # Original synthetic CFB v3 message with a Unicode body and one password-column CSV.
+    data = zlib.decompress(base64.b64decode(
+        "eNrt2stOwkAUBuBTEBW83xVvVXcuDOiCRI07XRriwi2B2mgjOIYOGB/HR/BJ9BH0QRT/lsE0RpJqjAnk/5q/p3S0h05JExqen6ZeHh6zr"
+        "/LFkSTlvZWWwcg+yyQ0KRhvtYLNTg20qKe8IQlzDQdQU0hwzYeQYSSNZMz4KOoYMo5MtD8CMoVMm/FZ1DlkHllAFpElJGvGV1BXkTVkHb"
+        "GRDWTTjNP/OxOFReNaHMsNal3u5SfmJWV1jmXF/J/o/aKE5RZdFdYuqhYP1cfeZvjax2uFd5aXHcl9c6ycJKzg85s09544/ZPm/tXp70t"
+        "DKlhruTR9Sqi5zyUvJ12PtY3+0fmM03/kS/8yOmusHbnqct4l2Yq8n/bSdijWZ/+BX87/d+e/JwXUQqzzT0Xu+3H6z8SY/3b/vMnun87/"
+        "cqQ/EREREREREVG/OxcvfNZUkaq4YksN65oo2cd2M3wGFewPng8qqeOvPGzvcNqIiIiIiIiIeooT/spEh7/AqeKbvSM+vvcTERERERERU"
+        "T85Vdo9KJZ9/07VLzLFRqXqObb2nGtXHzQ9VXW1reoVT2dsIiIiIiIiIupVHzT8x+U="
+    ))
+    path = tmp_path / "memo.msg"
+    path.write_bytes(data)
+    text, _, count = extract_isolated(path, "msg", with_counts=True)
+    assert "Visible memo:" in text and "Public ticket" in text and "Вложение 1" in text
+    assert "violet orbit" not in text and count == 2
+    with pytest.raises(FileError):
+        extract("msg", XLS)

@@ -1,9 +1,11 @@
 """Install a dedicated systemd unit for this checkout and Compose project."""
 import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
-from manage import ROOT, settings
+from manage import ROOT, STATE, replace, settings
 
 user = os.geteuid() != 0
 cfg = settings()
@@ -26,11 +28,22 @@ UMask=0077
 [Install]
 WantedBy={'default.target' if user else 'multi-user.target'}
 """
-directory.mkdir(exist_ok=True, parents=True)
+cmd = ["systemctl", *(["--user"] if user else [])]
+marker = STATE / "control" / "operator-disabled"
+if sys.argv[1:] == ["--disable"]:
+    replace(marker, "disabled\n", 0o644)
+    if destination.exists() and path in destination.read_text() and shutil.which("systemctl") and Path("/run/systemd/system").is_dir():
+        subprocess.run([*cmd, "disable", "--now", unit], check=True)
+    print("Веб-управление обновлениями отключено. Используйте python3 scripts/manage.py check или update.")
+    sys.exit(0)
+if sys.argv[1:]:
+    sys.exit("Используйте --disable для отключения помощника.")
 if destination.exists() and path not in destination.read_text():
     raise SystemExit("Имя службы уже используется другой установкой.")
+directory.mkdir(exist_ok=True, parents=True)
 destination.write_text(content)
-cmd = ["systemctl", *(["--user"] if user else [])]
 subprocess.run([*cmd, "daemon-reload"], check=True)
 subprocess.run([*cmd, "enable", unit], check=True)
 subprocess.run([*cmd, "restart", unit], check=True)
+marker.unlink(missing_ok=True)
+print("Помощник веб-обновлений включён.")

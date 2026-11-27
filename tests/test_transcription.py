@@ -129,5 +129,29 @@ class RecordingTests(unittest.TestCase):
                 worker.probe(self.folder / "dummy")
 
 
+    def test_status_owner_isolated_and_real_milestones(self):
+        index = "/transcription/"
+        response = self.client.post(index, data={"media": (io.BytesIO(b"audio"), "demo.wav")},
+                                     headers={"Accept": "application/json"})
+        assert response.status_code == 201
+        page = response.json["location"]
+        assert self.client.get(page + "/status").json["state"] == "queued"
+
+        def inference(path, engine, progress):
+            progress(5, 50)
+            state = self.client.get(page + "/status").json
+            assert state["state"] == "running" and state["stage"] == "Распознавание русской речи"
+            assert state["seconds"] == 5 and state["percent"] == 50
+            return "Результат."
+
+        with patch.object(worker, "transcribe", side_effect=inference):
+            worker.work(self.db, self.folder, None)
+        result = self.client.get(page + "/status").json
+        assert result["state"] == "done" and result["percent"] == 100 and len(result["events"]) == 4
+        assert "Результат" not in str(result)
+        self.owner = 2
+        assert self.client.get(page + "/status").status_code == 404
+
+
 if __name__ == "__main__":
     unittest.main()

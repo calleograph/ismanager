@@ -2,20 +2,40 @@
 {% block title %}{{ steps[step-1] }} · Модели угроз{% endblock %}
 {% block head %}<link rel="stylesheet" href="{{ url_for('static',filename='threats.css') }}">{% endblock %}
 {% block content %}
-<a href="{{ url_for('.index') }}">← Мои анкеты</a>
-<h1>{{ row.name }}</h1>
-<details class="panel threat-nav">
-  <summary>Шаг {{ step }} из 11 · {{ steps[step-1] }}</summary>
-  <ol>{% for title in steps %}<li>{% if loop.index <= row.stage %}<a href="{{ url_for('.edit',model_id=row.id,step=loop.index) }}" {% if step==loop.index %}aria-current="step"{% endif %}>{{ title }}</a>{% else %}{{ title }}{% endif %}</li>{% endfor %}</ol>
-</details>
-{% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
 {% macro state() -%}
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-<input type="hidden" name="revision" value="{{ row.revision }}">
+{% if row %}<input type="hidden" name="revision" value="{{ row.revision }}">{% endif %}
 {%- endmacro %}
+<div class="threat-workspace">
+  <aside class="threat-sidebar">
+    <details class="panel threat-nav" open><summary>Шаги анкеты</summary>
+      <nav aria-label="Шаги анкеты"><ol>
+      {% for title in steps %}
+        <li>{% if loop.index==step %}<span aria-current="step">
+          {% elif row and loop.index<=row.stage and step < 11 %}<button form="threat-form" name="jump" value="{{ loop.index }}" type="submit" formnovalidate>
+          {% elif row and loop.index<=row.stage %}<a href="{{ url_for('.edit',model_id=row.id,step=loop.index) }}">
+          {% else %}<span aria-disabled="true" title="Шаг откроется после заполнения предыдущих">{% endif %}
+          <b>{{ '%02d'|format(loop.index) }}</b> {{ title }}
+          {% if loop.index==step or not row or loop.index>row.stage %}</span>{% elif step<11 %}</button>{% else %}</a>{% endif %}
+        </li>
+      {% endfor %}
+      </ol></nav>
+    </details>
+    {% if result %}<section class="threat-summary"><h2>{{ 'Итог расчёта' if step==11 else 'Предварительный расчёт' }}</h2><p>УЗ-{{ result.level }} · {{ result.type }}-й тип угроз{% if result.crypto %} · СКЗИ {{ result.crypto['class'] }}{% endif %}</p></section>{% endif %}
+    {% if row and step<11 %}<button class="quiet threat-list-link" form="threat-form" name="action" value="list" formnovalidate>Все мои анкеты</button>
+    {% elif row %}<a class="threat-list-link" href="{{ url_for('.index') }}">Все мои анкеты</a>{% endif %}
+  </aside>
+  <div class="threat-body">
+    <header class="threat-heading"><div><small>Генератор модели угроз</small><h1>{{ steps[step-1] }}</h1></div>
+      <span aria-label="Шаг {{ step }} из 11">{{ '%02d'|format(step) }} / 11</span>
+      <progress value="{{ step }}" max="11" aria-label="Прогресс анкеты"></progress>
+    </header>
+{% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
 {% if step < 11 %}
-<form class="panel threats-form" method="post"{% if step==4 %} enctype="multipart/form-data"{% endif %}>
-  {{ state() }}<h2>{{ steps[step-1] }}</h2>
+<form class="threats-form" id="threat-form" method="post" action="{{ url_for('.edit',model_id=row.id,step=step) if row else url_for('.new') }}"{% if step in (1,4) %} enctype="multipart/form-data"{% endif %}>
+  {{ state() }}
+  {% if step==1 %}{% include "threats/profile.html" %}{% else %}
+  <div class="threat-card">
   {% for k in keys %}
     {% set _,kind,options=fields[k] %}
     <label>
@@ -31,10 +51,7 @@
     {% endif %}
     </label>
   {% endfor %}
-  {% if step==1 %}
-  <fieldset><legend>Особенности системы</legend>{% for code,item in catalog.significance.items() %}
-  <label><input type="checkbox" name="flags" value="{{ code }}" {% if code in data.get('flags',[]) %}checked{% endif %}> {{ item.title }}</label>{% endfor %}</fieldset>
-  {% elif step==4 %}
+  {% if step==4 %}
   <details><summary>Справочник средств защиты</summary>
     {% for group in catalog.securityTools.values() %}<p>{{ group.title }} · {{ group['items']|join(', ') }}</p>{% endfor %}</details>
   <label>Схема сети (.png или .jpg, до 2 МБ)<input type="file" name="diagram" accept="image/png,image/jpeg"></label>
@@ -73,8 +90,13 @@
     {% for code,presets in catalog.measureTemplates.items() %}<datalist id="templates-{{ code }}">{% for text in presets %}<option value="{{ text }}">{% endfor %}</datalist>{% endfor %}
   </details>
   {% endif %}
-  <div class="threat-actions"><button name="action" value="next">Далее</button><button name="action" value="save" class="quiet">Сохранить черновик</button>
-    {% if step>1 %}<a href="{{ url_for('.edit',model_id=row.id,step=step-1) }}">Назад</a>{% endif %}</div>
+  </div>{% endif %}
+  <div class="threat-actions">
+    {% if step>1 %}<button name="jump" value="{{ step-1 }}" class="secondary" formnovalidate>Назад</button>{% endif %}
+    <button name="action" value="save" class="quiet" formnovalidate>{{ 'Сохранить черновик' if row else 'Создать анкету' }}</button>
+    <button name="action" value="next">Далее {{ icon('chevron-right') }}</button>
+    {% if step==1 %}<button name="action" value="import" id="sheet-import" hidden>Применить файл</button>{% endif %}
+  </div>
 </form>
 {% else %}
 <section class="panel"><h2>Результат</h2>
@@ -84,11 +106,14 @@
 {% if row.ready %}<p><a href="{{ url_for('.download',model_id=row.id) }}">Скачать документы (.zip)</a></p>
 {% else %}<form method="post" action="{{ url_for('.generate',model_id=row.id) }}">{{ state() }}<button>Сформировать документы</button></form>{% endif %}
 </section>{% endif %}
-<section class="panel"><a href="{{ url_for('.export',model_id=row.id) }}">Скачать поля анкеты (.xlsx)</a>
+{% if row %}<details class="threat-service"><summary>Действия с анкетой</summary><p><a href="{{ url_for('.export',model_id=row.id) }}">Скачать поля анкеты (.xlsx)</a></p>
   <details><summary>Удалить анкету</summary>
     <p>Анкета и сформированные документы будут удалены.</p>
     <form method="post" action="{{ url_for('.delete',model_id=row.id) }}">{{ state() }}<button>Подтвердить удаление</button></form>
   </details>
-</section>
+</details>{% endif %}
+  </div>
+</div>
+{% if not row %}{% include "threats/index.html" %}{% endif %}
 {% endblock %}
-{% block scripts %}{% if step in (5,7) %}<script src="{{ url_for('static',filename='threats.js') }}" defer></script>{% endif %}{% endblock %}
+{% block scripts %}<script src="{{ url_for('static',filename='threats.js') }}" defer></script>{% endblock %}

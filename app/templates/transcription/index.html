@@ -4,13 +4,18 @@
 <h1>Транскрибация</h1>
 <div class="panel">
   <h2>Новая запись</h2>
-  <form method="post" enctype="multipart/form-data">
+  <form method="post" enctype="multipart/form-data" data-asr-upload>
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>Аудио или видео
       <input required type="file" name="media" accept="audio/*,video/*,.mkv,.m4a,.opus,.webm,.flac,.wma,.wmv,.amr,.3gp">
     </label>
     <p class="muted">До 512 МиБ и 6 часов. GigaAM распознаёт русскую речь локально.</p>
     <button type="submit">Расшифровать запись</button>
+    <section class="asr-console" data-upload-console hidden aria-label="Передача записи">
+      <strong role="status" data-upload-stage></strong>
+      <progress max="100" value="0" aria-label="Передача файла"></progress>
+      <span data-upload-count></span>
+    </section>
   </form>
   <p class="muted">{{ model_status }}</p>
 </div>
@@ -25,3 +30,6 @@
   {% else %}<p class="muted">Здесь появятся ваши записи и стенограммы.</p>{% endif %}
 </section>
 {% endblock %}
+
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='transcription.css') }}">{% endblock %}
+{% block scripts %}<script defer src="{{ url_for('static', filename='transcription.js') }}"></script>{% endblock %}

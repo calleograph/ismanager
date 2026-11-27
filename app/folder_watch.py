@@ -17,6 +17,7 @@ LOG = logging.getLogger("watch")
 INTERVAL = 15
 RETRY_DELAY = 30
 MAX_BYTES = 512 * 1024**2
+REDACTION_REVISION = 1
 DEFAULT_FOLDER = "Тексты IS Manager"
 REDACTION_FOLDER = "Обезличено IS Manager"
 REDACTED_OUTPUT = re.compile(r"ismanager-redacted-[0-9a-f]{32}(?:\.previous-[0-9a-f]{12}-[0-9a-f]{10})?\.txt", re.I)
@@ -362,14 +363,16 @@ def stage(db, item, rule, data_dir, engine, secret, root, now):
         ext = Path(item["name"]).suffix.lower()
         cached = db.execute("""SELECT f.timed_text,f.processing_note FROM watch_files f JOIN watch_rules r ON r.id=f.rule_id
                                WHERE r.kind=? AND f.source_sha=? AND f.source_sha!=''
-                               AND (?='transcription' OR lower(substr(f.name,-length(?)))=?) LIMIT 1""",
-                            (kind, sha, kind, ext, ext)).fetchone()
+                               AND (?='transcription' OR (f.redaction_revision=? AND lower(substr(f.name,-length(?)))=?))
+                               LIMIT 1""", (kind, sha, kind, REDACTION_REVISION, ext, ext)).fetchone()
         if cached:
             timed, note = cached
         else:
             timed, note = process_source(scratch, ext, kind, data_dir, engine)
         result = dict(state="publishing", result_stamp=item["stamp"], source_sha=sha, timed_text=timed,
                       processing_note=note, retry_at=0, error="")
+        if kind == "redaction":
+            result["redaction_revision"] = REDACTION_REVISION
         foreign = existing and not item["published_sha"] and (kind == "redaction" or (existing.size and item["replaced"]))
         if blocked or foreign:
             reserve_alternate(db, item, rule, now, sha, **result)
@@ -406,7 +409,13 @@ def publish(db, item, rule, secret, root, now):
                         raise FileExistsError(BLOCKED_OUTPUT)
                     if not item["publish_intent"] and not change(db, item, now, publish_intent=1):
                         return
-                    destination.publish_text(name, item["timed_text"], previous_sha256=previous, allow_identical=replay)
+                    expected_document = None
+                    if previous:
+                        if not item["output_stamp"]:
+                            raise FileExistsError(BLOCKED_OUTPUT)
+                        expected_document = watch_storage.Snapshot(name, *json.loads(item["output_stamp"]))
+                    destination.publish_text(name, item["timed_text"], previous_sha256=previous,
+                                             allow_identical=replay, previous_document=expected_document)
                 else:
                     if before is not None and before.size == 0:
                         previous = digest("")

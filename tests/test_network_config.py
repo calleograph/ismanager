@@ -51,3 +51,18 @@ def test_failed_network_switch_restores_entire_config(tmp_path, monkeypatch):
         network.main()
     assert manage.settings() == old
     assert compose.call_count == 2
+
+
+def test_public_http_origin_is_independent_of_proxy_backend():
+    cfg = network.network_settings({}, mode="proxy", port=18086, external="http://Portal.Example:8106")
+    assert cfg["BIND_ADDRESS"] == "127.0.0.1" and cfg["PORT"] == "18086"
+    assert cfg["PUBLIC_HOST"] == "portal.example:8106" and cfg["TRUSTED_PROXY_IPS"] == "gateway"
+    assert cfg["PUBLIC_URL"] == "http://portal.example:8106/"
+    assert network.network_settings(cfg) == cfg
+    secure = network.network_settings(cfg, external="https://portal.example")
+    assert secure["PUBLIC_URL"] == "https://portal.example/" and secure["PORT"] == "18086"
+    for origin in ("http://unrelated@portal.example", "http://example:0", "http://example/path", "https://example/#x"):
+        with pytest.raises(ValueError):
+            network.network_settings({}, mode="proxy", external=origin)
+    with pytest.raises(ValueError):
+        network.network_settings({}, mode="http", bind="127.0.0.1", port=18086, external="http://portal.example:8106")

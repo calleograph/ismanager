@@ -6,6 +6,7 @@
 {% if record %}
 <section class="panel">
   <h2>{% if preview %}Предпросмотр{% else %}Результат № {{ record.id }}{% endif %}</h2>
+  {% if record.legacy_rules %}<p class="notice">Этот результат создан по прежним правилам и может содержать секреты. Для повторной проверки загрузите исходный документ.</p>{% endif %}
   <p>{{ profiles[record.profile] }} · Замен выполнено {{ record.stats.values()|sum }}</p>
   {% for note in record.notes %}<p>{{ note }}</p>{% endfor %}
   <label>Обработанный текст<textarea rows="10" id="redacted-text" readonly>{{ record.result }}</textarea></label>
