@@ -49,6 +49,7 @@ def request(port, secure, path, headers=None):
     try:
         conn.request("GET", path, headers={"Host": f"{HOST}:{port}", **(headers or {})})
         reply = conn.getresponse()
+        reply.read()
         return reply.status, reply.headers
     finally:
         conn.close()
